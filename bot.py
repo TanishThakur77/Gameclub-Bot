@@ -6,13 +6,13 @@ from discord import app_commands
 from datetime import datetime, timedelta, timezone
 
 # ---------- CONFIG ----------
-I2C_RATE = 95               # INR → Crypto
-C2I_RATE_LOW = 91.0         # USD < 100
-C2I_RATE_HIGH = 91.5        # USD >= 100
+I2C_RATE = 95             # Crypto → INR multiplier
+C2I_RATE_LOW = 91.0       # USD < 100
+C2I_RATE_HIGH = 91.5      # USD >= 100
 C2I_THRESHOLD = 100.0
 
-GUILD_ID = 785743682334752768  # Your server ID
-GUILD = discord.Object(id=GUILD_ID)
+GUILD_ID = 785743682334752768  # Replace with your server ID
+MOD_ROLE_NAME = "Mods"          # Role allowed to change rates
 # ----------------------------
 
 intents = discord.Intents.default()
@@ -36,62 +36,80 @@ def pick_color(amount):
     else:
         return discord.Color.gold()
 
-# ---------- Slash Commands ----------
-@bot.tree.command(name="i2c", description="Convert INR → Crypto")
-@app_commands.describe(amount="Amount in INR you want to pay")
-async def i2c(interaction: discord.Interaction, amount: float):
-    try:
-        crypto_amount = amount / I2C_RATE
-    except:
-        await interaction.response.send_message("❌ Something went wrong.", ephemeral=True)
-        return
-
-    inr_str = f"**₹ {pretty_num(amount)}**"
-    crypto_str = f"**{pretty_num(crypto_amount)}**"
-    color = pick_color(amount)
-
-    embed = discord.Embed(
-        title="💱 INR → Crypto Conversion",
-        color=color
-    )
-    embed.add_field(name=f"⚖️ Rate used: ÷ {I2C_RATE}", value=inr_str, inline=True)
-    embed.add_field(name="🔗 You Receive (Crypto)", value=crypto_str, inline=True)
-
-    await interaction.response.send_message(embed=embed)
-
-@bot.tree.command(name="c2i", description="Convert Crypto (USD) → INR")
-@app_commands.describe(usd_amount="Amount of crypto in USD")
-async def c2i(interaction: discord.Interaction, usd_amount: float):
-    try:
-        rate = C2I_RATE_LOW if usd_amount < C2I_THRESHOLD else C2I_RATE_HIGH
-        inr_amount = usd_amount * rate
-    except:
-        await interaction.response.send_message("❌ Something went wrong.", ephemeral=True)
-        return
-
-    usd_str = f"**$ {pretty_num(usd_amount)}**"
-    inr_str = f"**₹ {pretty_num(inr_amount)}**"
-    rate_str = f"{rate:g}"
-    color = pick_color(inr_amount)
-
-    embed = discord.Embed(
-        title="💸 Crypto (USD) → INR Conversion",
-        color=color
-    )
-    embed.add_field(name="💰 You Pay (Crypto in USD)", value=usd_str, inline=True)
-    embed.add_field(name="🇮🇳 You Receive (INR)", value=inr_str, inline=True)
-    embed.add_field(name="⚖️ Rate used", value=f"{rate_str} INR per $", inline=False)
-
-    await interaction.response.send_message(embed=embed)
-
-# ---------- Events ----------
+# ---------- Bot Events ----------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    await bot.tree.sync(guild=GUILD)
-    print("🌐 Slash commands synced!")
+    guild = discord.Object(id=GUILD_ID)
+    await bot.tree.sync(guild=guild)
+    print("🔹 Slash commands synced for guild.")
 
-# ---------- Run bot ----------
+# ---------- Slash Commands ----------
+GUILD = discord.Object(id=GUILD_ID)
+
+# I2C: INR → Crypto
+@bot.tree.command(name="i2c", description="Convert INR to crypto (measured in USD)")
+@app_commands.describe(amount="Amount you pay in INR")
+async def i2c(interaction: discord.Interaction, amount: float):
+    crypto_amount = amount / I2C_RATE
+    color = pick_color(amount)
+    ist_now = datetime.now(tz=IST)
+    ist_formatted = ist_now.strftime("%I:%M %p, %d %b %Y")
+
+    embed = discord.Embed(
+        title=f"💱 INR → Crypto Conversion (Rate ÷ {I2C_RATE})",
+        color=color,
+        timestamp=ist_now
+    )
+    embed.add_field(name="💸 You Pay (INR)", value=f"**₹ {pretty_num(amount)}**", inline=True)
+    embed.add_field(name="🔗 You Receive (Crypto USD)", value=f"**{pretty_num(crypto_amount)}**", inline=True)
+    embed.set_footer(text=f"Time (IST): {ist_formatted}")
+
+    await interaction.response.send_message(embed=embed)
+
+# C2I: Crypto → INR
+@bot.tree.command(name="c2i", description="Convert crypto USD → INR")
+@app_commands.describe(amount="Amount in crypto USD")
+async def c2i(interaction: discord.Interaction, amount: float):
+    rate = C2I_RATE_LOW if amount < C2I_THRESHOLD else C2I_RATE_HIGH
+    inr_amount = amount * rate
+    color = pick_color(inr_amount)
+    ist_now = datetime.now(tz=IST)
+    ist_formatted = ist_now.strftime("%I:%M %p, %d %b %Y")
+
+    embed = discord.Embed(
+        title=f"💸 Crypto USD → INR Conversion (Rate × {rate})",
+        color=color,
+        timestamp=ist_now
+    )
+    embed.add_field(name="💰 You Pay (Crypto USD)", value=f"**$ {pretty_num(amount)}**", inline=True)
+    embed.add_field(name="🇮🇳 You Receive (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
+    embed.set_footer(text=f"Time (IST): {ist_formatted}")
+
+    await interaction.response.send_message(embed=embed)
+
+# Set rate command
+@bot.tree.command(name="setrate", description="Set conversion rates (admin only)")
+@app_commands.describe(type="Type: i2c or c2i", rate="New rate value")
+async def setrate(interaction: discord.Interaction, type: str, rate: float):
+    # Check for admin or Mods role
+    if not (interaction.user.guild_permissions.administrator or any(role.name == MOD_ROLE_NAME for role in interaction.user.roles)):
+        await interaction.response.send_message("❌ You do not have permission to change rates.", ephemeral=True)
+        return
+
+    global I2C_RATE, C2I_RATE_LOW, C2I_RATE_HIGH
+
+    if type.lower() == "i2c":
+        I2C_RATE = rate
+        await interaction.response.send_message(f"✅ I2C rate updated to {I2C_RATE}", ephemeral=True)
+    elif type.lower() == "c2i":
+        C2I_RATE_LOW = rate if C2I_RATE_LOW < C2I_THRESHOLD else C2I_RATE_LOW
+        C2I_RATE_HIGH = rate if C2I_RATE_HIGH >= C2I_THRESHOLD else C2I_RATE_HIGH
+        await interaction.response.send_message(f"✅ C2I rate updated to {rate}", ephemeral=True)
+    else:
+        await interaction.response.send_message("❌ Invalid type. Use `i2c` or `c2i`.", ephemeral=True)
+
+# ---------- Run Bot ----------
 token = os.environ.get("TOKEN")
 if not token:
     print("ERROR: No token found. Set TOKEN in environment variables.")
