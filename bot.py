@@ -28,7 +28,7 @@ def home():
     return "✅ Bot is running!"
 
 def run():
-    port = int(os.environ.get("PORT", 8080, 8080))
+    port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
 Thread(target=run).start()
@@ -114,15 +114,19 @@ async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choi
         return await interaction.response.send_message("🚫 You don't have permission to set rates.", ephemeral=True)
 
     global I2C_RATE, C2I_RATE_LOW, C2I_RATE_HIGH
+
     if rate_type.value == "i2c":
         I2C_RATE = new_rate
         msg = f"💱 I2C rate updated to **{new_rate} INR/$**"
     elif rate_type.value == "c2i_low":
         C2I_RATE_LOW = new_rate
         msg = f"💰 C2I Low rate updated to **{new_rate} INR/$**"
-    else:
+    elif rate_type.value == "c2i_high":
         C2I_RATE_HIGH = new_rate
         msg = f"💰 C2I High rate updated to **{new_rate} INR/$**"
+    else:
+        await interaction.response.send_message("❌ Invalid rate type.", ephemeral=True)
+        return
 
     await interaction.response.send_message(msg, ephemeral=True)
 
@@ -142,7 +146,7 @@ class ReceivingSelect(discord.ui.Select):
         if choice == "Crypto Address":
             slots = user_crypto.get(user_id, [{}]*5)
             msg = ""
-            for idx, slot in enumerate(slots):
+            for slot in slots:
                 if slot.get("address"):
                     msg += f"**Payment Address:**\n**{slot['address']}**\n**Type:** {slot['type']}\n\n"
             if not msg:
@@ -196,8 +200,3 @@ if not token:
     print("❌ ERROR: No token found in environment variables.")
 else:
     bot.run(token)
-
-    print("❌ TOKEN not found!")
-else:
-    bot.run(TOKEN)
-
