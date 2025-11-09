@@ -99,27 +99,33 @@ async def c2i(interaction: discord.Interaction, usd_amount: float):
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     await bot.wait_until_ready()
+    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Resyncing Commands..."))
 
     try:
-        # Clear and re-sync everything
-        print("🔄 Clearing old commands...")
-        bot.tree.clear_commands(guild=guild)
+        # -------- Clear ALL old commands --------
+        print("🧹 Clearing ALL commands (global + guild)...")
+        await bot.tree.sync()  # sync first to ensure connection
+        bot.tree.clear_commands(guild=None)  # global
+        bot.tree.clear_commands(guild=guild)  # guild
         await bot.tree.sync(guild=guild)
 
-        print("➕ Adding fresh commands...")
+        # -------- Add NEW commands again --------
+        print("🆕 Registering fresh commands...")
         bot.tree.add_command(ping)
         bot.tree.add_command(i2c)
         bot.tree.add_command(c2i)
 
-        print("🔁 Force syncing to Discord...")
+        # -------- Sync both globally and for the guild --------
+        print("🌍 Syncing global commands...")
+        await bot.tree.sync()
+        print("🏠 Syncing guild commands...")
         synced = await bot.tree.sync(guild=guild)
-        print(f"✅ Synced {len(synced)} command(s) for guild {guild.id}: {[cmd.name for cmd in synced]}")
 
+        print(f"✅ Synced {len(synced)} command(s) for guild {guild.id}: {[cmd.name for cmd in synced]}")
         await bot.change_presence(status=discord.Status.online, activity=discord.Game("USD ⇄ INR Converter 💱"))
         print("🟢 Bot is online and ready!")
     except Exception as e:
         print(f"⚠️ Command sync failed: {e}")
-
 
 # ---------- RUN ----------
 if __name__ == "__main__":
