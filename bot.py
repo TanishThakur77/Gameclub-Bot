@@ -6,41 +6,24 @@ from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
 
-# ---------------- CONFIG ----------------
-CONVERSION_RATE = 95.0  # Initial rate, can be changed with /setrate
+# ---------- CONFIG ----------
+I2C_RATE = 95.0           # INR → USD (crypto)
+C2I_RATE_LOW = 91.0       # USD < 100 → INR
+C2I_RATE_HIGH = 91.5      # USD >= 100 → INR
+C2I_THRESHOLD = 100.0     # Threshold for low/high C2I
+# ----------------------------
+
 GUILD_ID = 785743682334752768  # Replace with your server ID
-# ----------------------------------------
-
-# ---------- Keep-Alive Web Server ----------
-app = Flask('')
-
-@app.route('/')
-def home():
-    return "✅ Gameclub Bot is alive and running!"
-
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
-
-def keep_alive():
-    t = Thread(target=run_web)
-    t.start()
-
-# ---------- Discord Bot Setup ----------
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='.', intents=intents)
-tree = bot.tree
-IST = timezone(timedelta(hours=5, minutes=30))
+IST = timezone(timedelta(hours=5, minutes=30))  # India Standard Time
 
 # ---------- Helper Functions ----------
-def pretty_num(value: float) -> str:
+def pretty_num(value):
     """Format number with commas and two decimals."""
     if float(value).is_integer():
         return f"{int(value):,}"
     return f"{value:,.2f}"
 
-def pick_color(amount: float) -> discord.Color:
+def pick_color(amount):
     """Pick embed color based on value."""
     if amount < 500:
         return discord.Color.green()
@@ -49,20 +32,38 @@ def pick_color(amount: float) -> discord.Color:
     else:
         return discord.Color.gold()
 
-# ---------- On Ready ----------
+# ---------- Bot Setup ----------
+intents = discord.Intents.default()
+intents.message_content = True
+bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree
+
+# ---------- Keep-alive Flask ----------
+app = Flask("")
+
+@app.route("/")
+def home():
+    return "✅ Gameclub Bot is running!"
+
+def run_web():
+    port = int(os.environ.get("PORT", 8080))
+    app.run(host="0.0.0.0", port=port)
+
+Thread(target=run_web).start()
+
+# ---------- Bot Events ----------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    await bot.change_presence(status=discord.Status.online, activity=discord.Game("💱 USD ⇄ INR"))
+    await bot.change_presence(activity=discord.Game("💱 USD ⇄ INR"))
     try:
-        synced = await tree.sync()
-        print(f"🔹 Synced {len(synced)} global slash commands")
-        print("🟢 Bot is online and ready!")
+        await tree.sync()
+        print("🟢 Slash commands synced successfully!")
     except Exception as e:
-        print(f"⚠️ Command sync failed: {e}")
+        print(f"⚠️ Failed to sync commands: {e}")
 
-# ---------- /ping Command ----------
-@tree.command(name="ping", description="Check if the bot is alive.")
+# ---------- /ping ----------
+@tree.command(name="ping", description="Check if the bot is alive")
 async def ping(interaction: discord.Interaction):
     latency = round(bot.latency * 1000)
     embed = discord.Embed(
@@ -73,69 +74,105 @@ async def ping(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed)
 
-# ---------- /i2c Command (Divide by rate) ----------
-@tree.command(name="i2c", description="Convert INR → USD by dividing by current rate.")
-@app_commands.describe(amount="Enter the amount in INR")
+# ---------- /i2c ----------
+@tree.command(name="i2c", description="Convert INR → USD")
+@app_commands.describe(amount="Enter amount in INR")
 async def i2c(interaction: discord.Interaction, amount: float):
     try:
         await interaction.response.defer(thinking=True)
-        usd = amount / CONVERSION_RATE
-
+        usd = amount / I2C_RATE
+        color = pick_color(amount)
+        ist_now = datetime.now(tz=IST)
         embed = discord.Embed(
             title="💱 INR → USD Conversion",
-            color=pick_color(amount),
-            timestamp=datetime.now(tz=IST)
+            color=color,
+            timestamp=ist_now
         )
         embed.add_field(name="💸 Amount in INR", value=f"**₹ {pretty_num(amount)}**", inline=True)
         embed.add_field(name="💵 Converted USD", value=f"**$ {pretty_num(usd)}**", inline=True)
-        embed.set_footer(text=f"Rate: 1 USD = ₹{CONVERSION_RATE} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-
+        embed.add_field(name="⚖️ Rate Used", value=f"**{I2C_RATE} INR per $**", inline=False)
+        embed.set_footer(text=f"Time (IST): {ist_now.strftime('%I:%M %p, %d %b %Y')}")
         await interaction.followup.send(embed=embed)
     except Exception as e:
         print(f"❌ /i2c error: {e}")
-        await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+        await interaction.followup.send("❌ Something went wrong.", ephemeral=True)
 
-# ---------- /c2i Command (Multiply by rate) ----------
-@tree.command(name="c2i", description="Convert USD → INR by multiplying with current rate.")
-@app_commands.describe(amount="Enter the amount in USD")
+# ---------- /c2i ----------
+@tree.command(name="c2i", description="Convert USD → INR")
+@app_commands.describe(amount="Enter amount in USD")
 async def c2i(interaction: discord.Interaction, amount: float):
     try:
         await interaction.response.defer(thinking=True)
-        inr = amount * CONVERSION_RATE
-
+        rate = C2I_RATE_LOW if amount < C2I_THRESHOLD else C2I_RATE_HIGH
+        inr = amount * rate
+        color = pick_color(inr)
+        ist_now = datetime.now(tz=IST)
         embed = discord.Embed(
             title="💱 USD → INR Conversion",
-            color=pick_color(inr),
-            timestamp=datetime.now(tz=IST)
+            color=color,
+            timestamp=ist_now
         )
         embed.add_field(name="💵 Amount in USD", value=f"**$ {pretty_num(amount)}**", inline=True)
         embed.add_field(name="💸 Converted INR", value=f"**₹ {pretty_num(inr)}**", inline=True)
-        embed.set_footer(text=f"Rate: 1 USD = ₹{CONVERSION_RATE} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-
+        embed.add_field(name="⚖️ Rate Used", value=f"**{rate} INR per $**", inline=False)
+        embed.set_footer(text=f"Threshold: ${C2I_THRESHOLD} | Time (IST): {ist_now.strftime('%I:%M %p, %d %b %Y')}")
         await interaction.followup.send(embed=embed)
     except Exception as e:
         print(f"❌ /c2i error: {e}")
-        await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
+        await interaction.followup.send("❌ Something went wrong.", ephemeral=True)
 
-# ---------- /setrate Command (Admin only) ----------
-@tree.command(name="setrate", description="Set a new USD → INR conversion rate (Admin only).")
-@app_commands.describe(rate="Enter the new conversion rate")
-async def setrate(interaction: discord.Interaction, rate: float):
-    global CONVERSION_RATE
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("❌ You need to be an admin to change the rate.", ephemeral=True)
+# ---------- /setrate ----------
+@tree.command(name="setrate", description="Set conversion rates (i2c, c2i_low, c2i_high) - Admin only")
+@app_commands.describe(rate_type="Which rate to set (i2c/c2i_low/c2i_high)", new_rate="New rate value")
+async def setrate(interaction: discord.Interaction, rate_type: str, new_rate: float):
+    global I2C_RATE, C2I_RATE_LOW, C2I_RATE_HIGH
+    admin_roles = ["Mods"]  # Only users with this role or server admin
+
+    if not (interaction.user.guild_permissions.administrator or any(role.name in admin_roles for role in interaction.user.roles)):
+        embed = discord.Embed(
+            title="🚫 Permission Denied",
+            description="Only admins or @Mods can change the rates.",
+            color=discord.Color.red()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
         return
-    
-    CONVERSION_RATE = rate
-    await interaction.response.send_message(f"✅ Conversion rate updated to **₹{CONVERSION_RATE} per USD**")
+
+    rate_type = rate_type.lower()
+    if rate_type == "i2c":
+        I2C_RATE = new_rate
+        title = "💱 I2C Rate Updated"
+        desc = f"New rate: **{new_rate}**\nUsed for **INR → USD** conversions."
+        color = discord.Color.gold()
+    elif rate_type == "c2i_low":
+        C2I_RATE_LOW = new_rate
+        title = "💸 C2I Low Rate Updated"
+        desc = f"New rate: **{new_rate}**\nUsed for **USD < {C2I_THRESHOLD}**."
+        color = discord.Color.blue()
+    elif rate_type == "c2i_high":
+        C2I_RATE_HIGH = new_rate
+        title = "💰 C2I High Rate Updated"
+        desc = f"New rate: **{new_rate}**\nUsed for **USD ≥ {C2I_THRESHOLD}**."
+        color = discord.Color.green()
+    else:
+        embed = discord.Embed(
+            title="❗ Invalid Rate Type",
+            description="Use: `i2c`, `c2i_low`, or `c2i_high`",
+            color=discord.Color.orange()
+        )
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+        return
+
+    embed = discord.Embed(
+        title=title,
+        description=desc,
+        color=color
+    )
+    embed.set_footer(text=f"Updated by {interaction.user.display_name}")
+    await interaction.response.send_message(embed=embed)
 
 # ---------- Run Bot ----------
-if __name__ == "__main__":
-    keep_alive()  # Keeps Railway service awake
-    TOKEN = os.environ.get("TOKEN")
-    if not TOKEN:
-        print("❌ ERROR: TOKEN not found in environment variables.")
-    else:
-        print("🚀 Starting Gameclub Bot...")
-        bot.run(TOKEN)
-
+TOKEN = os.environ.get("TOKEN")
+if not TOKEN:
+    print("❌ ERROR: TOKEN not found in environment variables.")
+else:
+    bot.run(TOKEN)
