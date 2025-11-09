@@ -9,12 +9,11 @@ from threading import Thread
 # ---------- CONFIG ----------
 I2C_RATE = 95.0           # INR → USD (crypto)
 C2I_RATE_LOW = 91.0       # USD < 100 → INR
-C2I_RATE_HIGH = 91.5      # USD >= 100 → INR
+C2I_RATE_HIGH = 91.5      # USD ≥ 100 → INR
 C2I_THRESHOLD = 100.0     # Threshold for low/high C2I
-# ----------------------------
-
-GUILD_ID = 785743682334752768  # Replace with your server ID
+GUILD_ID = 785743682334752768  # Replace with your Discord server ID
 IST = timezone(timedelta(hours=5, minutes=30))  # India Standard Time
+# ----------------------------
 
 # ---------- Helper Functions ----------
 def pretty_num(value):
@@ -121,12 +120,17 @@ async def c2i(interaction: discord.Interaction, amount: float):
         print(f"❌ /c2i error: {e}")
         await interaction.followup.send("❌ Something went wrong.", ephemeral=True)
 
-# ---------- /setrate ----------
-@tree.command(name="setrate", description="Set conversion rates (i2c, c2i_low, c2i_high) - Admin only")
-@app_commands.describe(rate_type="Which rate to set (i2c/c2i_low/c2i_high)", new_rate="New rate value")
-async def setrate(interaction: discord.Interaction, rate_type: str, new_rate: float):
+# ---------- /setrate with dropdown ----------
+@tree.command(name="setrate", description="Set conversion rates (Admin only)")
+@app_commands.describe(new_rate="Enter the new rate value")
+@app_commands.choices(rate_type=[
+    app_commands.Choice(name="I2C (INR → USD)", value="i2c"),
+    app_commands.Choice(name="C2I Low (USD < 100)", value="c2i_low"),
+    app_commands.Choice(name="C2I High (USD ≥ 100)", value="c2i_high")
+])
+async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choice[str], new_rate: float):
     global I2C_RATE, C2I_RATE_LOW, C2I_RATE_HIGH
-    admin_roles = ["Mods"]  # Only users with this role or server admin
+    admin_roles = ["Mods"]
 
     if not (interaction.user.guild_permissions.administrator or any(role.name in admin_roles for role in interaction.user.roles)):
         embed = discord.Embed(
@@ -137,26 +141,26 @@ async def setrate(interaction: discord.Interaction, rate_type: str, new_rate: fl
         await interaction.response.send_message(embed=embed, ephemeral=True)
         return
 
-    rate_type = rate_type.lower()
-    if rate_type == "i2c":
+    rate_value = rate_type.value
+    if rate_value == "i2c":
         I2C_RATE = new_rate
         title = "💱 I2C Rate Updated"
         desc = f"New rate: **{new_rate}**\nUsed for **INR → USD** conversions."
         color = discord.Color.gold()
-    elif rate_type == "c2i_low":
+    elif rate_value == "c2i_low":
         C2I_RATE_LOW = new_rate
         title = "💸 C2I Low Rate Updated"
         desc = f"New rate: **{new_rate}**\nUsed for **USD < {C2I_THRESHOLD}**."
         color = discord.Color.blue()
-    elif rate_type == "c2i_high":
+    elif rate_value == "c2i_high":
         C2I_RATE_HIGH = new_rate
         title = "💰 C2I High Rate Updated"
         desc = f"New rate: **{new_rate}**\nUsed for **USD ≥ {C2I_THRESHOLD}**."
         color = discord.Color.green()
     else:
         embed = discord.Embed(
-            title="❗ Invalid Rate Type",
-            description="Use: `i2c`, `c2i_low`, or `c2i_high`",
+            title="❗ Invalid Choice",
+            description="Please choose a valid rate type.",
             color=discord.Color.orange()
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
