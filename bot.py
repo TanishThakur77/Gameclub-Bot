@@ -189,6 +189,60 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     # Send plain address/UPI immediately after
     await interaction.followup.send(f"{address}")
 
+# ---------- Super Detailed /help ----------
+@tree.command(name="help", description="Show all commands with examples")
+async def help_command(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📖 Bot Commands - Detailed Help",
+        color=discord.Color.green(),
+        timestamp=datetime.now(tz=IST)
+    )
+    
+    embed.add_field(
+        name="/add-addy <slot>",
+        value="Add or update your crypto slot (address + type).\n**Example:** `/add-addy slot_num:1` → Enter address & type in modal.",
+        inline=False
+    )
+    embed.add_field(
+        name="/add-upi <slot>",
+        value="Add or update your UPI slot.\n**Example:** `/add-upi slot_num:2` → Enter your UPI ID in modal.",
+        inline=False
+    )
+    embed.add_field(
+        name="/manage-slot",
+        value="Update or delete any of your slots.\n**Example:** `/manage-slot action:delete slot_type:crypto slot_num:1` → Deletes your crypto slot 1.\n`/manage-slot action:update slot_type:upi slot_num:2` → Opens modal to update your UPI slot 2.",
+        inline=False
+    )
+    embed.add_field(
+        name="/receiving-method",
+        value="View your saved crypto/UPI slot. Sends embed + plain address.\n**Example:** `/receiving-method slot_type:crypto slot_num:1` → Shows slot 1 address & type in embed, and plain address in next message.",
+        inline=False
+    )
+    embed.add_field(
+        name="/ping",
+        value="Check if the bot is online.\n**Example:** `/ping`",
+        inline=False
+    )
+    embed.add_field(
+        name="/i2c <amount>",
+        value="Convert INR → USD.\n**Example:** `/i2c amount:500` → Converts 500 INR to USD.",
+        inline=False
+    )
+    embed.add_field(
+        name="/c2i <amount>",
+        value="Convert USD → INR.\n**Example:** `/c2i amount:50` → Converts 50 USD to INR.",
+        inline=False
+    )
+    embed.add_field(
+        name="/setrate",
+        value="Admin only: Set conversion rates.\n**Example:** `/setrate rate_type:I2C new_rate:96` → Sets INR→USD rate to 96.",
+        inline=False
+    )
+    
+    embed.set_footer(text="Use slash commands (/) to interact with the bot. All your crypto & UPI slots are saved per user and persistent.")
+
+    await interaction.response.send_message(embed=embed, ephemeral=True)
+
 # ---------- Run Bot ----------
 TOKEN = os.environ.get("TOKEN")
 if not TOKEN:
