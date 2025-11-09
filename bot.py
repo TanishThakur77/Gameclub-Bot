@@ -133,7 +133,7 @@ async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choi
     embed.set_footer(text=f"Updated by {interaction.user.display_name}")
     await interaction.response.send_message(embed=embed)
 
-# ---------- Modal for Add Crypto ----------
+# ---------- Modals ----------
 class AddCryptoModal(discord.ui.Modal):
     def __init__(self, slot_num: int):
         super().__init__(title=f"Crypto Slot {slot_num}")
@@ -153,7 +153,6 @@ class AddCryptoModal(discord.ui.Modal):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ---------- Modal for Add UPI ----------
 class AddUPIModal(discord.ui.Modal):
     def __init__(self, slot_num: int):
         super().__init__(title=f"UPI Slot {slot_num}")
@@ -171,7 +170,12 @@ class AddUPIModal(discord.ui.Modal):
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ---------- /add-addy ----------
+class CopyModal(discord.ui.Modal):
+    def __init__(self, label, value):
+        super().__init__(title="Copy Payment Info")
+        self.add_item(discord.ui.TextInput(label=label, default=value, style=discord.TextStyle.short, required=False))
+
+# ---------- Add / Manage Slots ----------
 @tree.command(name="add-addy", description="Add or replace a crypto slot")
 @app_commands.describe(slot_num="Slot number 1-5")
 async def add_addy(interaction: discord.Interaction, slot_num: int):
@@ -180,7 +184,6 @@ async def add_addy(interaction: discord.Interaction, slot_num: int):
         return
     await interaction.response.send_modal(AddCryptoModal(slot_num))
 
-# ---------- /add-upi ----------
 @tree.command(name="add-upi", description="Add or replace a UPI slot")
 @app_commands.describe(slot_num="Slot number 1-5")
 async def add_upi(interaction: discord.Interaction, slot_num: int):
@@ -189,7 +192,6 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
         return
     await interaction.response.send_modal(AddUPIModal(slot_num))
 
-# ---------- /manage-slot ----------
 @tree.command(name="manage-slot", description="Update or delete your own slot")
 @app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
 @app_commands.choices(action=[
@@ -222,7 +224,7 @@ async def manage_slot(interaction: discord.Interaction, action: app_commands.Cho
         else:
             await interaction.response.send_modal(AddUPIModal(slot_num))
 
-# ---------- /receiving-method ----------
+# ---------- Receiving Method with Copy Modal ----------
 from discord.ui import View, Button
 
 @tree.command(name="receiving-method", description="Select crypto or UPI slot to pay")
@@ -269,7 +271,7 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     if address != "Empty":
         button = Button(label=button_label, style=discord.ButtonStyle.secondary)
         async def copy_callback(interaction2: discord.Interaction):
-            await interaction2.response.send_message(f"`{address}` copied!", ephemeral=True)
+            await interaction2.response.send_modal(CopyModal(button_label, address))
         button.callback = copy_callback
         view.add_item(button)
 
@@ -281,4 +283,3 @@ if not TOKEN:
     print("❌ TOKEN not found!")
 else:
     bot.run(TOKEN)
-
