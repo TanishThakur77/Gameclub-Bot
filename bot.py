@@ -189,6 +189,39 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
         return
     await interaction.response.send_modal(AddUPIModal(slot_num))
 
+# ---------- /manage-slot ----------
+@tree.command(name="manage-slot", description="Update or delete your own slot")
+@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
+@app_commands.choices(action=[
+    app_commands.Choice(name="Update", value="update"),
+    app_commands.Choice(name="Delete", value="delete")
+])
+@app_commands.choices(slot_type=[
+    app_commands.Choice(name="Crypto", value="crypto"),
+    app_commands.Choice(name="UPI", value="upi")
+])
+async def manage_slot(interaction: discord.Interaction, action: app_commands.Choice[str], slot_type: app_commands.Choice[str], slot_num: int):
+    if slot_num < 1 or slot_num > 5:
+        await interaction.response.send_message("❌ Invalid slot! Choose 1-5.", ephemeral=True)
+        return
+
+    if slot_type.value == "crypto":
+        slots = user_crypto_slots.setdefault(interaction.user.id, {i: {"address": None, "type": None} for i in range(1,6)})
+    else:
+        slots = user_upi_slots.setdefault(interaction.user.id, {i: None for i in range(1,6)})
+
+    if action.value == "delete":
+        if slot_type.value == "crypto":
+            slots[slot_num] = {"address": None, "type": None}
+        else:
+            slots[slot_num] = None
+        await interaction.response.send_message(f"✅ {slot_type.value.capitalize()} Slot {slot_num} deleted.", ephemeral=True)
+    else:
+        if slot_type.value == "crypto":
+            await interaction.response.send_modal(AddCryptoModal(slot_num))
+        else:
+            await interaction.response.send_modal(AddUPIModal(slot_num))
+
 # ---------- /receiving-method ----------
 from discord.ui import View, Button
 
@@ -211,24 +244,30 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
         slot_data = slots[slot_num.value]
         address = slot_data["address"] or "Empty"
         addr_type = slot_data["type"] or "Empty"
+        embed = discord.Embed(
+            title="📌 Payment Method",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(tz=IST)
+        )
+        embed.add_field(name="💰 Payment Address", value=f"**{address}**", inline=False)
+        embed.add_field(name="🔹 Address Type", value=f"**{addr_type}**", inline=False)
+        embed.set_footer(text=f"Time: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+        button_label = "Copy Address"
     else:
         slots = user_upi_slots.setdefault(interaction.user.id, {i: None for i in range(1,6)})
         address = slots[slot_num.value] or "Empty"
-        addr_type = None
-
-    embed = discord.Embed(
-        title="📌 Payment Method",
-        color=discord.Color.blue(),
-        timestamp=datetime.now(tz=IST)
-    )
-    embed.add_field(name="💰 Payment Address", value=f"**{address}**", inline=False)
-    if addr_type:
-        embed.add_field(name="🔹 Address Type", value=f"**{addr_type}**", inline=False)
-    embed.set_footer(text=f"Time: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+        embed = discord.Embed(
+            title="📌 Payment Method",
+            color=discord.Color.blue(),
+            timestamp=datetime.now(tz=IST)
+        )
+        embed.add_field(name="💰 Payment UPI", value=f"**{address}**", inline=False)
+        embed.set_footer(text=f"Time: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+        button_label = "Copy UPI"
 
     view = View()
     if address != "Empty":
-        button = Button(label="Copy Address", style=discord.ButtonStyle.secondary)
+        button = Button(label=button_label, style=discord.ButtonStyle.secondary)
         async def copy_callback(interaction2: discord.Interaction):
             await interaction2.response.send_message(f"`{address}` copied!", ephemeral=True)
         button.callback = copy_callback
@@ -242,3 +281,4 @@ if not TOKEN:
     print("❌ TOKEN not found!")
 else:
     bot.run(TOKEN)
+
