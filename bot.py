@@ -109,4 +109,3 @@ if not token:
     print("❌ ERROR: TOKEN not found in environment variables.")
 else:
     bot.run(token)
-
