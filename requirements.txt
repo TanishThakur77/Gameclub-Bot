@@ -1,5 +1,6 @@
 discord.py==2.6.4
-flash==3.0.3
+flask==3.0.3
+
 
 
 
