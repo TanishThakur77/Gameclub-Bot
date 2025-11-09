@@ -60,10 +60,10 @@ async def ping(interaction: discord.Interaction):
     embed.set_footer(text=datetime.now(tz=IST).strftime("Time (IST): %I:%M %p, %d %b %Y"))
     await interaction.response.send_message(embed=embed)
 
+
 @app_commands.command(name="i2c", description="Convert Crypto USD → INR")
 @app_commands.describe(usd_amount="Enter the crypto amount in USD")
 async def i2c(interaction: discord.Interaction, usd_amount: float):
-    await interaction.response.defer(thinking=True)
     inr_amount = usd_amount * I2C_RATE
     embed = discord.Embed(
         title=f"💱 Crypto → INR | Rate ₹{I2C_RATE}",
@@ -73,12 +73,12 @@ async def i2c(interaction: discord.Interaction, usd_amount: float):
     embed.add_field(name="💸 You Pay (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
     embed.add_field(name="🔗 You Receive (Crypto USD)", value=f"**$ {pretty_num(usd_amount)}**", inline=True)
     embed.set_footer(text=datetime.now(tz=IST).strftime("Time (IST): %I:%M %p, %d %b %Y"))
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
+
 
 @app_commands.command(name="c2i", description="Convert Client USD → INR")
 @app_commands.describe(usd_amount="Enter the client amount in USD")
 async def c2i(interaction: discord.Interaction, usd_amount: float):
-    await interaction.response.defer(thinking=True)
     rate = C2I_RATE_LOW if usd_amount < C2I_THRESHOLD else C2I_RATE_HIGH
     inr_amount = usd_amount * rate
     embed = discord.Embed(
@@ -91,34 +91,35 @@ async def c2i(interaction: discord.Interaction, usd_amount: float):
     embed.add_field(name="🇮🇳 You Receive (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
     embed.add_field(name="⚖️ Rate Used", value=f"**₹{rate:g} per $**", inline=False)
     embed.set_footer(text=f"Threshold: ${C2I_THRESHOLD} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-    await interaction.followup.send(embed=embed)
+    await interaction.response.send_message(embed=embed)
+
 
 # ---------- ON_READY ----------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Syncing Commands..."))
+    await bot.wait_until_ready()
 
     try:
-        # Clear all global and guild commands
-        await bot.tree.sync()
-        await bot.tree.sync(guild=guild)
+        # Clear and re-sync everything
+        print("🔄 Clearing old commands...")
         bot.tree.clear_commands(guild=guild)
+        await bot.tree.sync(guild=guild)
 
-        # Add all commands again (fresh sync)
+        print("➕ Adding fresh commands...")
         bot.tree.add_command(ping)
         bot.tree.add_command(i2c)
         bot.tree.add_command(c2i)
 
+        print("🔁 Force syncing to Discord...")
         synced = await bot.tree.sync(guild=guild)
-        print(f"🔹 Force-synced {len(synced)} command(s) for guild {guild.id}")
-        for cmd in synced:
-            print(f"✅ Registered: /{cmd.name}")
+        print(f"✅ Synced {len(synced)} command(s) for guild {guild.id}: {[cmd.name for cmd in synced]}")
 
         await bot.change_presence(status=discord.Status.online, activity=discord.Game("USD ⇄ INR Converter 💱"))
         print("🟢 Bot is online and ready!")
     except Exception as e:
         print(f"⚠️ Command sync failed: {e}")
+
 
 # ---------- RUN ----------
 if __name__ == "__main__":
