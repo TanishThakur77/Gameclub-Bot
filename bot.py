@@ -7,7 +7,7 @@ from flask import Flask
 from threading import Thread
 
 # ---------------- CONFIG ----------------
-CONVERSION_RATE = 95.0  # divide or multiply by this rate
+CONVERSION_RATE = 95.0  # Initial rate, can be changed with /setrate
 GUILD_ID = 785743682334752768  # Replace with your server ID
 # ----------------------------------------
 
@@ -73,8 +73,8 @@ async def ping(interaction: discord.Interaction):
     )
     await interaction.response.send_message(embed=embed)
 
-# ---------- /i2c Command (Divide by 95) ----------
-@tree.command(name="i2c", description="Convert INR → USD (Divide by 95).")
+# ---------- /i2c Command (Divide by rate) ----------
+@tree.command(name="i2c", description="Convert INR → USD by dividing by current rate.")
 @app_commands.describe(amount="Enter the amount in INR")
 async def i2c(interaction: discord.Interaction, amount: float):
     try:
@@ -95,8 +95,8 @@ async def i2c(interaction: discord.Interaction, amount: float):
         print(f"❌ /i2c error: {e}")
         await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
 
-# ---------- /c2i Command (Multiply by 95) ----------
-@tree.command(name="c2i", description="Convert USD → INR (Multiply by 95).")
+# ---------- /c2i Command (Multiply by rate) ----------
+@tree.command(name="c2i", description="Convert USD → INR by multiplying with current rate.")
 @app_commands.describe(amount="Enter the amount in USD")
 async def c2i(interaction: discord.Interaction, amount: float):
     try:
@@ -117,6 +117,18 @@ async def c2i(interaction: discord.Interaction, amount: float):
         print(f"❌ /c2i error: {e}")
         await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
 
+# ---------- /setrate Command (Admin only) ----------
+@tree.command(name="setrate", description="Set a new USD → INR conversion rate (Admin only).")
+@app_commands.describe(rate="Enter the new conversion rate")
+async def setrate(interaction: discord.Interaction, rate: float):
+    global CONVERSION_RATE
+    if not interaction.user.guild_permissions.administrator:
+        await interaction.response.send_message("❌ You need to be an admin to change the rate.", ephemeral=True)
+        return
+    
+    CONVERSION_RATE = rate
+    await interaction.response.send_message(f"✅ Conversion rate updated to **₹{CONVERSION_RATE} per USD**")
+
 # ---------- Run Bot ----------
 if __name__ == "__main__":
     keep_alive()  # Keeps Railway service awake
@@ -126,3 +138,4 @@ if __name__ == "__main__":
     else:
         print("🚀 Starting Gameclub Bot...")
         bot.run(TOKEN)
+
