@@ -5,7 +5,8 @@ from flask import Flask
 import threading
 import os
 
-TOKEN = os.getenv("DISCORD_TOKEN")  # keep this in Railway Variables
+# ✅ Match Railway variable name
+TOKEN = os.getenv("TOKEN")  # use "TOKEN" since that's your Railway variable name
 GUILD_ID = 785743682334752768  # replace with your actual server ID
 
 intents = discord.Intents.default()
@@ -46,15 +47,7 @@ async def c2i(interaction: discord.Interaction, amount: float):
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     guild = discord.Object(id=GUILD_ID)
-
     try:
-        print("🧹 Clearing old commands...")
-        await tree.sync(guild=guild)
-        tree.clear_commands(guild=guild)
-
-        print("🆕 Registering new commands...")
-        await tree.sync(guild=guild)
-
         synced = await tree.sync(guild=guild)
         print(f"✅ Synced {len(synced)} commands for guild {guild.id}: {[cmd.name for cmd in synced]}")
         await bot.change_presence(activity=discord.Game("💱 Currency Converter Active"))
@@ -62,5 +55,6 @@ async def on_ready():
     except Exception as e:
         print(f"⚠️ Sync failed: {e}")
 
+# ---- Run ----
 keep_alive()
 bot.run(TOKEN)
