@@ -2,7 +2,6 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import View, Select, Modal, TextInput, Button
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
@@ -64,7 +63,7 @@ async def on_ready():
 async def ping(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🏓 Pong!",
-        description=f"Bot is working ✅",
+        description="Bot is working ✅",
         color=discord.Color.green(),
         timestamp=datetime.now(tz=IST)
     )
@@ -135,67 +134,23 @@ async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choi
     await interaction.response.send_message(embed=embed)
 
 # ---------- Modal for Add / Update ----------
-class AddSlotModal(Modal):
+class AddSlotModal(discord.ui.Modal):
     def __init__(self, slot_type: str, slot_num: int):
         super().__init__(title=f"{slot_type.capitalize()} Slot {slot_num}")
         self.slot_type = slot_type
         self.slot_num = slot_num
-        self.add_item(TextInput(label="Enter Value", placeholder="Address or UPI here", required=True))
+        self.add_item(discord.ui.TextInput(label="Enter Value", placeholder="Address or UPI here", required=True))
 
     async def on_submit(self, interaction: discord.Interaction):
         slots = crypto_slots if self.slot_type=="crypto" else upi_slots
         slots[self.slot_num] = self.children[0].value
         embed = discord.Embed(
             title=f"✅ {self.slot_type.capitalize()} Slot {self.slot_num} Updated",
-            description=f"New Value: `{self.children[0].value}`",
+            description=f"New Value: **{self.children[0].value}**",
             color=discord.Color.green(),
             timestamp=datetime.now(tz=IST)
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-# ---------- Dropdown View ----------
-class SlotSelect(Select):
-    def __init__(self):
-        options = []
-        for i in range(1, 6):
-            crypto_val = crypto_slots[i] or "Empty"
-            upi_val = upi_slots[i] or "Empty"
-            options.append(discord.SelectOption(
-                label=f"Crypto Slot {i}: {crypto_val}",
-                description="Select to pay using this crypto slot",
-                value=f"crypto_{i}"
-            ))
-            options.append(discord.SelectOption(
-                label=f"UPI Slot {i}: {upi_val}",
-                description="Select to pay using this UPI slot",
-                value=f"upi_{i}"
-            ))
-        super().__init__(placeholder="Select slot to pay", min_values=1, max_values=1, options=options)
-
-    async def callback(self, interaction: discord.Interaction):
-        val = self.values[0].split("_")
-        slot_type = val[0]
-        slot_num = int(val[1])
-        slots = crypto_slots if slot_type=="crypto" else upi_slots
-        slot_val = slots[slot_num] or "Empty"
-        msg = f"💰 Pay on this {slot_type.upper()} only: `{slot_val}`\nSend screenshot of payment."
-        embed = discord.Embed(
-            title=f"📌 {slot_type.capitalize()} Slot {slot_num}",
-            description=msg,
-            color=discord.Color.blue(),
-            timestamp=datetime.now(tz=IST)
-        )
-        await interaction.response.send_message(embed=embed)
-
-class SlotView(View):
-    def __init__(self):
-        super().__init__()
-        self.add_item(SlotSelect())
-
-# ---------- /receiving-method ----------
-@tree.command(name="receiving-method", description="Select crypto or UPI slot to pay")
-async def receiving_method(interaction: discord.Interaction):
-    await interaction.response.send_message("Select a slot to pay:", view=SlotView(), ephemeral=True)
 
 # ---------- /add-addy ----------
 @tree.command(name="add-addy", description="Add/replace crypto slot")
@@ -236,6 +191,31 @@ async def manage_slot(interaction: discord.Interaction, action: app_commands.Cho
         await interaction.response.send_message(f"✅ {slot_type.value.capitalize()} Slot {slot_num} deleted.", ephemeral=True)
     else:
         await interaction.response.send_modal(AddSlotModal(slot_type.value, slot_num))
+
+# ---------- /receiving-method ----------
+@tree.command(name="receiving-method", description="Select crypto or UPI slot to pay")
+@app_commands.describe(slot_type="Type", slot_num="Slot number 1-5")
+@app_commands.choices(slot_type=[
+    app_commands.Choice(name="Crypto", value="crypto"),
+    app_commands.Choice(name="UPI", value="upi")
+])
+@app_commands.choices(slot_num=[
+    app_commands.Choice(name="1", value=1),
+    app_commands.Choice(name="2", value=2),
+    app_commands.Choice(name="3", value=3),
+    app_commands.Choice(name="4", value=4),
+    app_commands.Choice(name="5", value=5)
+])
+async def receiving_method(interaction: discord.Interaction, slot_type: app_commands.Choice[str], slot_num: app_commands.Choice[int]):
+    slots = crypto_slots if slot_type.value=="crypto" else upi_slots
+    value = slots[slot_num.value] or "Empty"
+    embed = discord.Embed(
+        title=f"📌 {slot_type.value} Slot {slot_num.value}",
+        description=f"💰 **PAY HERE ONLY: {value}**\nSend screenshot of payment.",
+        color=discord.Color.blue(),
+        timestamp=datetime.now(tz=IST)
+    )
+    await interaction.response.send_message(embed=embed)
 
 # ---------- Run Bot ----------
 TOKEN = os.environ.get("TOKEN")
