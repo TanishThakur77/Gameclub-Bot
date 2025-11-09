@@ -7,10 +7,8 @@ from flask import Flask
 from threading import Thread
 
 # ---------------- CONFIG ----------------
-I2C_RATE = 95.0             # Crypto → INR
-C2I_RATE_LOW = 91.0         # USD < 100
-C2I_RATE_HIGH = 91.5        # USD >= 100
-C2I_THRESHOLD = 100.0
+CONVERSION_RATE = 95.0  # divide or multiply by this rate
+GUILD_ID = 785743682334752768  # Replace with your server ID
 # ----------------------------------------
 
 # ---------- Keep-Alive Web Server ----------
@@ -18,7 +16,7 @@ app = Flask('')
 
 @app.route('/')
 def home():
-    return "✅ Gameclub Bot is alive and running on Railway!"
+    return "✅ Gameclub Bot is alive and running!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -37,13 +35,13 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 # ---------- Helper Functions ----------
 def pretty_num(value: float) -> str:
-    """Format a number with commas and decimals."""
+    """Format number with commas and two decimals."""
     if float(value).is_integer():
         return f"{int(value):,}"
     return f"{value:,.2f}"
 
 def pick_color(amount: float) -> discord.Color:
-    """Choose an embed color based on INR value."""
+    """Pick embed color based on value."""
     if amount < 500:
         return discord.Color.green()
     elif amount < 2000:
@@ -55,57 +53,64 @@ def pick_color(amount: float) -> discord.Color:
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    await bot.change_presence(status=discord.Status.online, activity=discord.Game("💱 Converting USD ⇄ INR"))
+    await bot.change_presence(status=discord.Status.online, activity=discord.Game("💱 USD ⇄ INR"))
     try:
-        synced = await tree.sync()  # 🌍 Global sync
-        print(f"🔹 Synced {len(synced)} global commands: {[cmd.name for cmd in synced]}")
+        synced = await tree.sync()
+        print(f"🔹 Synced {len(synced)} global slash commands")
         print("🟢 Bot is online and ready!")
     except Exception as e:
         print(f"⚠️ Command sync failed: {e}")
 
-# ---------- /i2c Command ----------
-@tree.command(name="i2c", description="Convert Crypto USD → INR")
-@app_commands.describe(crypto_usd="Enter the crypto amount in USD")
-async def i2c(interaction: discord.Interaction, crypto_usd: float):
-    """Convert crypto USD to INR based on fixed rate."""
+# ---------- /ping Command ----------
+@tree.command(name="ping", description="Check if the bot is alive.")
+async def ping(interaction: discord.Interaction):
+    latency = round(bot.latency * 1000)
+    embed = discord.Embed(
+        title="🏓 Pong!",
+        description=f"Latency: {latency} ms",
+        color=discord.Color.green(),
+        timestamp=datetime.now(tz=IST)
+    )
+    await interaction.response.send_message(embed=embed)
+
+# ---------- /i2c Command (Divide by 95) ----------
+@tree.command(name="i2c", description="Convert INR → USD (Divide by 95).")
+@app_commands.describe(amount="Enter the amount in INR")
+async def i2c(interaction: discord.Interaction, amount: float):
     try:
         await interaction.response.defer(thinking=True)
-        inr_amount = crypto_usd * I2C_RATE
+        usd = amount / CONVERSION_RATE
 
         embed = discord.Embed(
-            title=f"💱 Crypto → INR | Rate: ₹{I2C_RATE}",
-            color=pick_color(inr_amount),
+            title="💱 INR → USD Conversion",
+            color=pick_color(amount),
             timestamp=datetime.now(tz=IST)
         )
-        embed.add_field(name="💸 You Pay (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
-        embed.add_field(name="🔗 You Receive (Crypto USD)", value=f"**$ {pretty_num(crypto_usd)}**", inline=True)
-        embed.set_footer(text=datetime.now(tz=IST).strftime("Time (IST): %I:%M %p, %d %b %Y"))
+        embed.add_field(name="💸 Amount in INR", value=f"**₹ {pretty_num(amount)}**", inline=True)
+        embed.add_field(name="💵 Converted USD", value=f"**$ {pretty_num(usd)}**", inline=True)
+        embed.set_footer(text=f"Rate: 1 USD = ₹{CONVERSION_RATE} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
 
         await interaction.followup.send(embed=embed)
     except Exception as e:
         print(f"❌ /i2c error: {e}")
         await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
 
-# ---------- /c2i Command ----------
-@tree.command(name="c2i", description="Convert Client USD → INR")
-@app_commands.describe(usd_amount="Enter the amount in USD")
-async def c2i(interaction: discord.Interaction, usd_amount: float):
-    """Convert client USD to INR using tiered rate."""
+# ---------- /c2i Command (Multiply by 95) ----------
+@tree.command(name="c2i", description="Convert USD → INR (Multiply by 95).")
+@app_commands.describe(amount="Enter the amount in USD")
+async def c2i(interaction: discord.Interaction, amount: float):
     try:
         await interaction.response.defer(thinking=True)
-        rate = C2I_RATE_LOW if usd_amount < C2I_THRESHOLD else C2I_RATE_HIGH
-        inr_amount = usd_amount * rate
+        inr = amount * CONVERSION_RATE
 
         embed = discord.Embed(
-            title="💸 USD → INR Conversion",
-            description="Conversion based on client threshold",
-            color=pick_color(inr_amount),
+            title="💱 USD → INR Conversion",
+            color=pick_color(inr),
             timestamp=datetime.now(tz=IST)
         )
-        embed.add_field(name="💰 You Pay (USD)", value=f"**$ {pretty_num(usd_amount)}**", inline=True)
-        embed.add_field(name="🇮🇳 You Receive (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
-        embed.add_field(name="⚖️ Rate Used", value=f"**₹{rate:g} per $**", inline=False)
-        embed.set_footer(text=f"Threshold: ${C2I_THRESHOLD} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+        embed.add_field(name="💵 Amount in USD", value=f"**$ {pretty_num(amount)}**", inline=True)
+        embed.add_field(name="💸 Converted INR", value=f"**₹ {pretty_num(inr)}**", inline=True)
+        embed.set_footer(text=f"Rate: 1 USD = ₹{CONVERSION_RATE} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
 
         await interaction.followup.send(embed=embed)
     except Exception as e:
@@ -115,15 +120,9 @@ async def c2i(interaction: discord.Interaction, usd_amount: float):
 # ---------- Run Bot ----------
 if __name__ == "__main__":
     keep_alive()  # Keeps Railway service awake
-    token = os.getenv("TOKEN")
-    if not token:
+    TOKEN = os.environ.get("TOKEN")
+    if not TOKEN:
         print("❌ ERROR: TOKEN not found in environment variables.")
     else:
         print("🚀 Starting Gameclub Bot...")
-        bot.run(token)
-
-
-# ---- Run ----
-keep_alive()
-bot.run(TOKEN)
-
+        bot.run(TOKEN)
