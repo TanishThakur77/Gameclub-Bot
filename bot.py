@@ -45,7 +45,7 @@ def pretty_num(value: float) -> str:
     return f"{value:,.2f}"
 
 def pick_color(amount: float) -> discord.Color:
-    """Embed color based on INR value."""
+    """Choose an embed color based on INR value."""
     if amount < 500:
         return discord.Color.green()
     elif amount < 2000:
@@ -57,9 +57,11 @@ def pick_color(amount: float) -> discord.Color:
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Converting USD ⇄ INR 💱"))
     try:
         await bot.tree.sync(guild=GUILD)
         print(f"🔹 Slash commands synced successfully for guild {GUILD_ID}")
+        print("🟢 Bot is online and ready!")
     except Exception as e:
         print(f"⚠️ Command sync failed: {e}")
 
@@ -68,9 +70,10 @@ async def on_ready():
 @app_commands.describe(crypto_usd="Enter the crypto amount in USD")
 async def i2c(interaction: discord.Interaction, crypto_usd: float):
     """Convert crypto USD to INR based on fixed rate."""
-    await interaction.response.defer(thinking=True)
     try:
+        await interaction.response.defer(thinking=True)
         inr_amount = crypto_usd * I2C_RATE
+
         embed = discord.Embed(
             title=f"💱 Crypto → INR | Rate: ₹{I2C_RATE}",
             color=pick_color(inr_amount),
@@ -79,9 +82,10 @@ async def i2c(interaction: discord.Interaction, crypto_usd: float):
         embed.add_field(name="💸 You Pay (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
         embed.add_field(name="🔗 You Receive (Crypto USD)", value=f"**$ {pretty_num(crypto_usd)}**", inline=True)
         embed.set_footer(text=datetime.now(tz=IST).strftime("Time (IST): %I:%M %p, %d %b %Y"))
+
         await interaction.followup.send(embed=embed)
     except Exception as e:
-        print(f"❌ /i2c Error: {e}")
+        print(f"❌ /i2c error: {e}")
         await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
 
 # ---------- /c2i Command ----------
@@ -89,10 +93,11 @@ async def i2c(interaction: discord.Interaction, crypto_usd: float):
 @app_commands.describe(usd_amount="Enter the amount in USD")
 async def c2i(interaction: discord.Interaction, usd_amount: float):
     """Convert client USD to INR using tiered rate."""
-    await interaction.response.defer(thinking=True)
     try:
+        await interaction.response.defer(thinking=True)
         rate = C2I_RATE_LOW if usd_amount < C2I_THRESHOLD else C2I_RATE_HIGH
         inr_amount = usd_amount * rate
+
         embed = discord.Embed(
             title="💸 USD → INR Conversion",
             description="Conversion based on client threshold",
@@ -103,9 +108,10 @@ async def c2i(interaction: discord.Interaction, usd_amount: float):
         embed.add_field(name="🇮🇳 You Receive (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
         embed.add_field(name="⚖️ Rate Used", value=f"**₹{rate:g} per $**", inline=False)
         embed.set_footer(text=f"Threshold: ${C2I_THRESHOLD} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+
         await interaction.followup.send(embed=embed)
     except Exception as e:
-        print(f"❌ /c2i Error: {e}")
+        print(f"❌ /c2i error: {e}")
         await interaction.followup.send("❌ Something went wrong. Please try again.", ephemeral=True)
 
 # ---------- Run Bot ----------
