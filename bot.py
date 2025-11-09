@@ -242,6 +242,24 @@ async def help_command(interaction: discord.Interaction):
     embed.set_footer(text="Use slash commands (/) to interact with the bot. All your crypto & UPI slots are saved per user and persistent.")
 
     await interaction.response.send_message(embed=embed, ephemeral=True)
+    
+# ---------- /command ----------
+@tree.command(name="command", description="List all bot commands in plain text")
+async def command_list(interaction: discord.Interaction):
+    commands_text = """**These are the Commands for The GameClub Bot:**
+/ping
+/i2c
+/c2i
+/setrate
+/add-addy
+/add-upi
+/manage-slot
+/receiving-method
+/help
+/command
+"""
+    await interaction.response.send_message(commands_text, ephemeral=True)
+
 
 # ---------- Run Bot ----------
 TOKEN = os.environ.get("TOKEN")
