@@ -1,138 +1,66 @@
-import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from datetime import datetime, timedelta, timezone
 from flask import Flask
-from threading import Thread
+import threading
+import os
 
-# ---------------- CONFIG ----------------
-GUILD_ID = 785743682334752768  # Replace with your Discord Server ID
-I2C_RATE = 95.0                # Crypto → INR
-C2I_RATE_LOW = 91.0            # USD < 100
-C2I_RATE_HIGH = 91.5           # USD ≥ 100
-C2I_THRESHOLD = 100.0
-IST = timezone(timedelta(hours=5, minutes=30))
-# ----------------------------------------
+TOKEN = os.getenv("DISCORD_TOKEN")  # keep this in Railway Variables
+GUILD_ID = 785743682334752768  # replace with your actual server ID
 
-# ---------- KEEP-ALIVE WEB SERVER ----------
+intents = discord.Intents.default()
+bot = commands.Bot(command_prefix="!", intents=intents)
+tree = bot.tree
+
+# ---- Keep-alive Flask ----
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ The Gameclub Bot is alive and running on Railway!"
+    return "Bot is running!"
 
-def run_web():
-    port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+def run():
+    app.run(host="0.0.0.0", port=8080)
 
 def keep_alive():
-    t = Thread(target=run_web)
+    t = threading.Thread(target=run)
     t.start()
 
-# ---------- DISCORD BOT SETUP ----------
-intents = discord.Intents.default()
-intents.message_content = True
-bot = commands.Bot(command_prefix='.', intents=intents)
-guild = discord.Object(id=GUILD_ID)
-
-# ---------- HELPER FUNCTIONS ----------
-def pretty_num(value: float) -> str:
-    return f"{value:,.2f}".rstrip('0').rstrip('.') if '.' in f"{value:,.2f}" else f"{int(value):,}"
-
-def pick_color(amount: float) -> discord.Color:
-    if amount < 500:
-        return discord.Color.green()
-    elif amount < 2000:
-        return discord.Color.blue()
-    return discord.Color.gold()
-
-# ---------- COMMANDS ----------
-@app_commands.command(name="ping", description="Check bot latency and uptime")
+# ---- Slash commands ----
+@tree.command(name="ping", description="Check if the bot is alive.")
 async def ping(interaction: discord.Interaction):
-    latency = bot.latency * 1000
-    embed = discord.Embed(
-        title="🏓 Pong!",
-        description=f"Latency: **{latency:.2f} ms**",
-        color=discord.Color.green(),
-        timestamp=datetime.now(tz=IST)
-    )
-    embed.set_footer(text=datetime.now(tz=IST).strftime("Time (IST): %I:%M %p, %d %b %Y"))
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message("🏓 Pong! The bot is active and responding.", ephemeral=True)
 
+@tree.command(name="i2c", description="Convert INR to USD")
+async def i2c(interaction: discord.Interaction, amount: float):
+    converted = amount / 83.0
+    await interaction.response.send_message(f"💱 ₹{amount} = ${converted:.2f}", ephemeral=True)
 
-@app_commands.command(name="i2c", description="Convert Crypto USD → INR")
-@app_commands.describe(usd_amount="Enter the crypto amount in USD")
-async def i2c(interaction: discord.Interaction, usd_amount: float):
-    inr_amount = usd_amount * I2C_RATE
-    embed = discord.Embed(
-        title=f"💱 Crypto → INR | Rate ₹{I2C_RATE}",
-        color=pick_color(inr_amount),
-        timestamp=datetime.now(tz=IST)
-    )
-    embed.add_field(name="💸 You Pay (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
-    embed.add_field(name="🔗 You Receive (Crypto USD)", value=f"**$ {pretty_num(usd_amount)}**", inline=True)
-    embed.set_footer(text=datetime.now(tz=IST).strftime("Time (IST): %I:%M %p, %d %b %Y"))
-    await interaction.response.send_message(embed=embed)
+@tree.command(name="c2i", description="Convert USD to INR")
+async def c2i(interaction: discord.Interaction, amount: float):
+    converted = amount * 83.0
+    await interaction.response.send_message(f"💱 ${amount} = ₹{converted:.2f}", ephemeral=True)
 
-
-@app_commands.command(name="c2i", description="Convert Client USD → INR")
-@app_commands.describe(usd_amount="Enter the client amount in USD")
-async def c2i(interaction: discord.Interaction, usd_amount: float):
-    rate = C2I_RATE_LOW if usd_amount < C2I_THRESHOLD else C2I_RATE_HIGH
-    inr_amount = usd_amount * rate
-    embed = discord.Embed(
-        title="💸 USD → INR Conversion",
-        description="Conversion based on client threshold",
-        color=pick_color(inr_amount),
-        timestamp=datetime.now(tz=IST)
-    )
-    embed.add_field(name="💰 You Pay (USD)", value=f"**$ {pretty_num(usd_amount)}**", inline=True)
-    embed.add_field(name="🇮🇳 You Receive (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
-    embed.add_field(name="⚖️ Rate Used", value=f"**₹{rate:g} per $**", inline=False)
-    embed.set_footer(text=f"Threshold: ${C2I_THRESHOLD} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-    await interaction.response.send_message(embed=embed)
-
-
-# ---------- ON_READY ----------
+# ---- Ready Event ----
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    await bot.wait_until_ready()
-    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Resyncing Commands..."))
+    guild = discord.Object(id=GUILD_ID)
 
     try:
-        # -------- Clear ALL old commands --------
-        print("🧹 Clearing ALL commands (global + guild)...")
-        await bot.tree.sync()  # sync first to ensure connection
-        bot.tree.clear_commands(guild=None)  # global
-        bot.tree.clear_commands(guild=guild)  # guild
-        await bot.tree.sync(guild=guild)
+        print("🧹 Clearing old commands...")
+        await tree.sync(guild=guild)
+        tree.clear_commands(guild=guild)
 
-        # -------- Add NEW commands again --------
-        print("🆕 Registering fresh commands...")
-        bot.tree.add_command(ping)
-        bot.tree.add_command(i2c)
-        bot.tree.add_command(c2i)
+        print("🆕 Registering new commands...")
+        await tree.sync(guild=guild)
 
-        # -------- Sync both globally and for the guild --------
-        print("🌍 Syncing global commands...")
-        await bot.tree.sync()
-        print("🏠 Syncing guild commands...")
-        synced = await bot.tree.sync(guild=guild)
-
-        print(f"✅ Synced {len(synced)} command(s) for guild {guild.id}: {[cmd.name for cmd in synced]}")
-        await bot.change_presence(status=discord.Status.online, activity=discord.Game("USD ⇄ INR Converter 💱"))
+        synced = await tree.sync(guild=guild)
+        print(f"✅ Synced {len(synced)} commands for guild {guild.id}: {[cmd.name for cmd in synced]}")
+        await bot.change_presence(activity=discord.Game("💱 Currency Converter Active"))
         print("🟢 Bot is online and ready!")
     except Exception as e:
-        print(f"⚠️ Command sync failed: {e}")
+        print(f"⚠️ Sync failed: {e}")
 
-# ---------- RUN ----------
-if __name__ == "__main__":
-    keep_alive()
-    token = os.getenv("TOKEN")
-    if not token:
-        print("❌ ERROR: TOKEN not found in environment variables.")
-    else:
-        print("🚀 Starting The Gameclub Bot...")
-        bot.run(token)
+keep_alive()
+bot.run(TOKEN)
