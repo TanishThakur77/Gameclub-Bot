@@ -108,17 +108,30 @@ async def c2i(interaction: discord.Interaction, usd_amount: float):
 # ---------- ON_READY ----------
 @bot.event
 async def on_ready():
+   @bot.event
+async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
     await bot.change_presence(status=discord.Status.online, activity=discord.Game("Syncing Commands..."))
 
     try:
+        # Clear any previous commands (optional safety)
         bot.tree.clear_commands(guild=guild)
+
+        # Add all commands again
         bot.tree.add_command(ping)
         bot.tree.add_command(i2c)
         bot.tree.add_command(c2i)
-        synced = await bot.tree.sync(guild=guild)
 
-        print(f"🔹 Synced {len(synced)} command(s) successfully for guild {guild.id}")
+        # Now sync them
+        synced = await bot.tree.sync(guild=guild)
+        print(f"🔹 Force-synced {len(synced)} command(s) for guild {guild.id}")
+
+        if len(synced) == 0:
+            print("⚠️ No commands were registered! Check TOKEN, intents, or permissions.")
+        else:
+            for cmd in synced:
+                print(f"✅ Registered: /{cmd.name}")
+
         await bot.change_presence(status=discord.Status.online, activity=discord.Game("USD ⇄ INR Converter 💱"))
         print("🟢 Bot is online and ready!")
     except Exception as e:
