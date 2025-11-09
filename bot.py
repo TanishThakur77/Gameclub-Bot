@@ -48,15 +48,21 @@ async def ping(interaction: discord.Interaction):
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Testing connection 🛰️"))
+    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Syncing commands..."))
 
     try:
-        # Clear any old commands and re-register /ping fresh
+        # 🧹 Remove all global commands first
+        await bot.tree.sync()
+        print("🧹 Cleared global commands")
+
+        # 🧱 Add guild-level commands fresh
         bot.tree.clear_commands(guild=GUILD)
         bot.tree.add_command(ping)
         await bot.tree.sync(guild=GUILD)
         print(f"🔹 Slash commands synced successfully for guild {GUILD_ID}")
-        print("🟢 Bot is online and ready to respond!")
+
+        await bot.change_presence(status=discord.Status.online, activity=discord.Game("Ready for /ping 💥"))
+        print("🟢 Bot is online and ready!")
     except Exception as e:
         print(f"⚠️ Command sync failed: {e}")
 
