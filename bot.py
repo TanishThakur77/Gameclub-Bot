@@ -147,7 +147,7 @@ class AddCryptoModal(discord.ui.Modal):
         slots[self.slot_num]["type"] = self.children[1].value
         embed = discord.Embed(
             title=f"✅ Crypto Slot {self.slot_num} Updated",
-            description=f"Address: **{self.children[0].value}**\nType: **{self.children[1].value}**",
+            description=f"Address: `{self.children[0].value}`\nType: `{self.children[1].value}`",
             color=discord.Color.green(),
             timestamp=datetime.now(tz=IST)
         )
@@ -164,16 +164,11 @@ class AddUPIModal(discord.ui.Modal):
         slots[self.slot_num] = self.children[0].value
         embed = discord.Embed(
             title=f"✅ UPI Slot {self.slot_num} Updated",
-            description=f"UPI ID: **{self.children[0].value}**",
+            description=f"UPI ID: `{self.children[0].value}`",
             color=discord.Color.green(),
             timestamp=datetime.now(tz=IST)
         )
         await interaction.response.send_message(embed=embed, ephemeral=True)
-
-class CopyModal(discord.ui.Modal):
-    def __init__(self, label, value):
-        super().__init__(title="Copy Payment Info")
-        self.add_item(discord.ui.TextInput(label=label, default=value, style=discord.TextStyle.short, required=False))
 
 # ---------- Add / Manage Slots ----------
 @tree.command(name="add-addy", description="Add or replace a crypto slot")
@@ -192,40 +187,8 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
         return
     await interaction.response.send_modal(AddUPIModal(slot_num))
 
-@tree.command(name="manage-slot", description="Update or delete your own slot")
-@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
-@app_commands.choices(action=[
-    app_commands.Choice(name="Update", value="update"),
-    app_commands.Choice(name="Delete", value="delete")
-])
-@app_commands.choices(slot_type=[
-    app_commands.Choice(name="Crypto", value="crypto"),
-    app_commands.Choice(name="UPI", value="upi")
-])
-async def manage_slot(interaction: discord.Interaction, action: app_commands.Choice[str], slot_type: app_commands.Choice[str], slot_num: int):
-    if slot_num < 1 or slot_num > 5:
-        await interaction.response.send_message("❌ Invalid slot! Choose 1-5.", ephemeral=True)
-        return
-
-    if slot_type.value == "crypto":
-        slots = user_crypto_slots.setdefault(interaction.user.id, {i: {"address": None, "type": None} for i in range(1,6)})
-    else:
-        slots = user_upi_slots.setdefault(interaction.user.id, {i: None for i in range(1,6)})
-
-    if action.value == "delete":
-        if slot_type.value == "crypto":
-            slots[slot_num] = {"address": None, "type": None}
-        else:
-            slots[slot_num] = None
-        await interaction.response.send_message(f"✅ {slot_type.value.capitalize()} Slot {slot_num} deleted.", ephemeral=True)
-    else:
-        if slot_type.value == "crypto":
-            await interaction.response.send_modal(AddCryptoModal(slot_num))
-        else:
-            await interaction.response.send_modal(AddUPIModal(slot_num))
-
-# ---------- Receiving Method with Copy Modal ----------
-from discord.ui import View, Button
+# ---------- Receiving Method ----------
+from discord.ui import View
 
 @tree.command(name="receiving-method", description="Select crypto or UPI slot to pay")
 @app_commands.describe(slot_type="Type", slot_num="Slot number 1-5")
@@ -251,10 +214,9 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
             color=discord.Color.blue(),
             timestamp=datetime.now(tz=IST)
         )
-        embed.add_field(name="💰 Payment Address", value=f"**{address}**", inline=False)
-        embed.add_field(name="🔹 Address Type", value=f"**{addr_type}**", inline=False)
+        embed.add_field(name="💰 Payment Address", value=f"`{address}`", inline=False)
+        embed.add_field(name="🔹 Address Type", value=f"`{addr_type}`", inline=False)
         embed.set_footer(text=f"Time: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-        button_label = "Copy Address"
     else:
         slots = user_upi_slots.setdefault(interaction.user.id, {i: None for i in range(1,6)})
         address = slots[slot_num.value] or "Empty"
@@ -263,19 +225,10 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
             color=discord.Color.blue(),
             timestamp=datetime.now(tz=IST)
         )
-        embed.add_field(name="💰 Payment UPI", value=f"**{address}**", inline=False)
+        embed.add_field(name="💰 Payment UPI", value=f"`{address}`", inline=False)
         embed.set_footer(text=f"Time: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-        button_label = "Copy UPI"
 
-    view = View()
-    if address != "Empty":
-        button = Button(label=button_label, style=discord.ButtonStyle.secondary)
-        async def copy_callback(interaction2: discord.Interaction):
-            await interaction2.response.send_modal(CopyModal(button_label, address))
-        button.callback = copy_callback
-        view.add_item(button)
-
-    await interaction.response.send_message(embed=embed, view=view)
+    await interaction.response.send_message(embed=embed)
 
 # ---------- Run Bot ----------
 TOKEN = os.environ.get("TOKEN")
