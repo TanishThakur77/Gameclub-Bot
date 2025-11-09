@@ -2,25 +2,20 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
+from datetime import datetime, timedelta, timezone
 
-# ---------------- CONFIG ----------------
-I2C_RATE = 95.0             # Crypto → INR
-C2I_RATE_LOW = 91.0         # USD < 100
-C2I_RATE_HIGH = 91.5        # USD >= 100
-C2I_THRESHOLD = 100.0
+# ---------- CONFIG ----------
+GUILD_ID = 785743682334752768  # 🔹 Replace with your server's ID
+IST = timezone(timedelta(hours=5, minutes=30))
 
-GUILD_ID = 785743682334752768  # 🔹 Replace with your Discord Server ID
-# ----------------------------------------
-
-# ---------- Keep-Alive Web Server ----------
-app = Flask('')
+# ---------- KEEP-ALIVE SERVER ----------
+app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "✅ Gameclub Bot is alive and running on Railway!"
+    return "✅ Gameclub Bot is alive and connected to Railway!"
 
 def run_web():
     port = int(os.environ.get("PORT", 8080))
@@ -30,98 +25,46 @@ def keep_alive():
     t = Thread(target=run_web)
     t.start()
 
-# ---------- Discord Bot Setup ----------
+# ---------- DISCORD BOT SETUP ----------
 intents = discord.Intents.default()
 intents.message_content = True
 bot = commands.Bot(command_prefix='.', intents=intents)
-IST = timezone(timedelta(hours=5, minutes=30))
 GUILD = discord.Object(id=GUILD_ID)
 
-# ---------- Helper Functions ----------
-def pretty_num(value: float) -> str:
-    """Format a number with commas and decimals."""
-    if float(value).is_integer():
-        return f"{int(value):,}"
-    return f"{value:,.2f}"
+# ---------- /ping COMMAND ----------
+@app_commands.command(name="ping", description="Check if the bot is online and responding")
+async def ping(interaction: discord.Interaction):
+    """Test if bot is alive."""
+    latency = bot.latency * 1000  # in milliseconds
+    embed = discord.Embed(
+        title="🏓 Pong!",
+        description=f"Latency: **{latency:.2f} ms**",
+        color=discord.Color.green(),
+        timestamp=datetime.now(tz=IST)
+    )
+    await interaction.response.send_message(embed=embed)
 
-def pick_color(amount: float) -> discord.Color:
-    """Choose embed color based on amount."""
-    if amount < 500:
-        return discord.Color.green()
-    elif amount < 2000:
-        return discord.Color.blue()
-    return discord.Color.gold()
-
-# ---------- /i2c Command ----------
-@app_commands.command(name="i2c", description="Convert Crypto USD → INR")
-@app_commands.describe(crypto_usd="Enter the crypto amount in USD")
-async def i2c(interaction: discord.Interaction, crypto_usd: float):
-    """Convert crypto USD to INR."""
-    try:
-        await interaction.response.defer(thinking=True)
-        inr_amount = crypto_usd * I2C_RATE
-
-        embed = discord.Embed(
-            title=f"💱 Crypto → INR | Rate: ₹{I2C_RATE}",
-            color=pick_color(inr_amount),
-            timestamp=datetime.now(tz=IST)
-        )
-        embed.add_field(name="💸 You Pay (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
-        embed.add_field(name="🔗 You Receive (Crypto USD)", value=f"**$ {pretty_num(crypto_usd)}**", inline=True)
-        embed.set_footer(text=datetime.now(tz=IST).strftime("Time (IST): %I:%M %p, %d %b %Y"))
-
-        await interaction.followup.send(embed=embed)
-    except Exception as e:
-        print(f"❌ /i2c error: {e}")
-        await interaction.followup.send("❌ Something went wrong.", ephemeral=True)
-
-# ---------- /c2i Command ----------
-@app_commands.command(name="c2i", description="Convert Client USD → INR")
-@app_commands.describe(usd_amount="Enter the amount in USD")
-async def c2i(interaction: discord.Interaction, usd_amount: float):
-    """Convert client USD to INR using tiered rates."""
-    try:
-        await interaction.response.defer(thinking=True)
-        rate = C2I_RATE_LOW if usd_amount < C2I_THRESHOLD else C2I_RATE_HIGH
-        inr_amount = usd_amount * rate
-
-        embed = discord.Embed(
-            title="💸 USD → INR Conversion",
-            description="Conversion based on client threshold",
-            color=pick_color(inr_amount),
-            timestamp=datetime.now(tz=IST)
-        )
-        embed.add_field(name="💰 You Pay (USD)", value=f"**$ {pretty_num(usd_amount)}**", inline=True)
-        embed.add_field(name="🇮🇳 You Receive (INR)", value=f"**₹ {pretty_num(inr_amount)}**", inline=True)
-        embed.add_field(name="⚖️ Rate Used", value=f"**₹{rate:g} per $**", inline=False)
-        embed.set_footer(text=f"Threshold: ${C2I_THRESHOLD} | Time (IST): {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-
-        await interaction.followup.send(embed=embed)
-    except Exception as e:
-        print(f"❌ /c2i error: {e}")
-        await interaction.followup.send("❌ Something went wrong.", ephemeral=True)
-
-# ---------- On Ready ----------
+# ---------- ON_READY EVENT ----------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
-    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Converting USD ⇄ INR 💱"))
+    await bot.change_presence(status=discord.Status.online, activity=discord.Game("Testing connection 🛰️"))
 
-    # 🚨 Reset and re-sync commands to avoid SignatureMismatch
     try:
+        # Clear any old commands and re-register /ping fresh
         bot.tree.clear_commands(guild=GUILD)
-        bot.tree.add_command(i2c)
-        bot.tree.add_command(c2i)
+        bot.tree.add_command(ping)
         await bot.tree.sync(guild=GUILD)
-        print(f"🔹 Commands synced successfully for guild {GUILD_ID}")
-        print("🟢 Bot is online and ready!")
+        print(f"🔹 Slash commands synced successfully for guild {GUILD_ID}")
+        print("🟢 Bot is online and ready to respond!")
     except Exception as e:
         print(f"⚠️ Command sync failed: {e}")
 
-# ---------- Run Bot ----------
+# ---------- RUN BOT ----------
 if __name__ == "__main__":
     keep_alive()
     token = os.getenv("TOKEN")
+
     if not token:
         print("❌ ERROR: TOKEN not found in environment variables.")
     else:
