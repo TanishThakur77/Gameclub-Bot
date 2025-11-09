@@ -63,11 +63,10 @@ async def on_ready():
 async def ping(interaction: discord.Interaction):
     embed = discord.Embed(
         title="🏓 Pong!",
-        description="Bot is working ✅",
+        description="Bot is working ✅ All systems operational.",
         color=discord.Color.green(),
         timestamp=datetime.now(tz=IST)
     )
-    embed.add_field(name="Info", value="All systems are operational!")
     await interaction.response.send_message(embed=embed)
 
 # ---------- /i2c ----------
@@ -139,7 +138,8 @@ class AddSlotModal(discord.ui.Modal):
         super().__init__(title=f"{slot_type.capitalize()} Slot {slot_num}")
         self.slot_type = slot_type
         self.slot_num = slot_num
-        self.add_item(discord.ui.TextInput(label="Enter Value", placeholder="Address or UPI here", required=True))
+        placeholder = "Enter your address (e.g., USDT POLY / USDT BEP20 / LTC)" if slot_type=="crypto" else "Enter your UPI ID"
+        self.add_item(discord.ui.TextInput(label="Value", placeholder=placeholder, required=True))
 
     async def on_submit(self, interaction: discord.Interaction):
         slots = crypto_slots if self.slot_type=="crypto" else upi_slots
@@ -210,8 +210,8 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     slots = crypto_slots if slot_type.value=="crypto" else upi_slots
     value = slots[slot_num.value] or "Empty"
     embed = discord.Embed(
-        title=f"📌 {slot_type.value} Slot {slot_num.value}",
-        description=f"💰 **PAY HERE ONLY: {value}**\nSend screenshot of payment.",
+        title="📌 Payment Address",
+        description=f"💰 **__{value}__**\nSend screenshot of payment.",
         color=discord.Color.blue(),
         timestamp=datetime.now(tz=IST)
     )
