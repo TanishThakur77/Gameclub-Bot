@@ -2,7 +2,6 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import View, Select, TextInput, Button
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
@@ -155,7 +154,9 @@ async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choi
     await interaction.response.send_message(embed=embed)
 
 # ---------- Add / Update Slots ----------
-class AddSlotModal(discord.ui.Modal):
+from discord.ui import Modal, TextInput
+
+class AddSlotModal(Modal):
     def __init__(self, slot_type: str, slot_num: int):
         super().__init__(title=f"{slot_type.capitalize()} Slot {slot_num}")
         self.slot_type = slot_type
@@ -202,8 +203,6 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
     await interaction.response.send_modal(AddSlotModal("upi", slot_num))
 
 # ---------- /manage-slot ----------
-@tree.command(name="manage-slot", description="Update or delete any slot")
-@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
 @app_commands.choices(action=[
     app_commands.Choice(name="Update", value="update"),
     app_commands.Choice(name="Delete", value="delete")
@@ -212,6 +211,8 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
     app_commands.Choice(name="Crypto", value="crypto"),
     app_commands.Choice(name="UPI", value="upi")
 ])
+@tree.command(name="manage-slot", description="Update or delete any slot")
+@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
 async def manage_slot(interaction: discord.Interaction, action: app_commands.Choice[str], slot_type: app_commands.Choice[str], slot_num: int):
     uid = str(interaction.user.id)
     if uid not in user_slots:
@@ -260,85 +261,58 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     )
     await interaction.response.send_message(embed=embed)
 
-# ---------- /done - fully in-message interaction ----------
-class DoneExchangeView(View):
-    def __init__(self, guild):
-        super().__init__(timeout=None)
-        self.guild = guild
-
-        # Dropdown to select user
-        self.user_select = Select(
-            placeholder="Select user",
-            min_values=1,
-            max_values=1,
-            options=[discord.SelectOption(label=m.display_name, value=str(m.id)) for m in guild.members if not m.bot]
-        )
-        self.user_select.callback = self.user_callback
-        self.add_item(self.user_select)
-
-        # Text inputs
-        self.amount_input = TextInput(label="Amount (USD)", placeholder="Enter USD amount", required=True, style=discord.TextStyle.short)
-        self.type_input = TextInput(label="Exchange Type", placeholder="i2c or c2i", required=True, style=discord.TextStyle.short)
-
-        # Submit button
-        self.submit_btn = Button(label="Record Exchange", style=discord.ButtonStyle.green)
-        self.submit_btn.callback = self.submit_callback
-        self.add_item(self.submit_btn)
-
-        self.selected_user_id = None
-        self.amount = None
-        self.ex_type = None
-
-    async def user_callback(self, interaction: discord.Interaction):
-        self.selected_user_id = self.user_select.values[0]
-        await interaction.response.send_message(f"Selected user! Now enter Amount and Exchange Type and press Record Exchange.", ephemeral=True)
-
-    async def submit_callback(self, interaction: discord.Interaction):
-        if not self.selected_user_id:
-            await interaction.response.send_message("❌ Please select a user first!", ephemeral=True)
-            return
-        # Get input values
-        self.amount = self.amount_input.value
-        self.ex_type = self.type_input.value.lower()
-        try:
-            self.amount = float(self.amount)
-            if self.ex_type not in ["i2c", "c2i"]:
-                await interaction.response.send_message("❌ Exchange type must be i2c or c2i!", ephemeral=True)
-                return
-
-            if self.selected_user_id not in exchanges:
-                exchanges[self.selected_user_id] = {"total_amount": 0.0, "deals": 0}
-            exchanges[self.selected_user_id]["total_amount"] += self.amount
-            exchanges[self.selected_user_id]["deals"] += 1
-            save_json(EXCHANGE_FILE, exchanges)
-
-            member_obj = interaction.guild.get_member(int(self.selected_user_id))
-            embed = discord.Embed(
-                title="✅ Exchange Recorded",
-                color=pick_color(self.amount),
-                timestamp=datetime.now(tz=IST)
-            )
-            embed.add_field(name="User", value=member_obj.mention if member_obj else self.selected_user_id)
-            embed.add_field(name="Amount", value=f"${self.amount:,.2f}")
-            embed.add_field(name="Type", value=self.ex_type.upper())
-            embed.add_field(name="Total Deals", value=str(exchanges[self.selected_user_id]["deals"]))
-            embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-            await interaction.response.send_message(embed=embed)
-
-        except ValueError:
-            await interaction.response.send_message("❌ Amount must be a number!", ephemeral=True)
-
+# ---------- /done (fixed) ----------
 @tree.command(name="done", description="Record a completed exchange")
-async def done(interaction: discord.Interaction):
-    view = DoneExchangeView(interaction.guild)
+@app_commands.describe(
+    user="Mention the user who did the exchange",
+    amount="Amount in USD",
+    ex_type="Exchange type: i2c or c2i"
+)
+async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
+    ex_type = ex_type.lower()
+    if ex_type not in ["i2c", "c2i"]:
+        await interaction.response.send_message("❌ Exchange type must be either `i2c` or `c2i`!", ephemeral=True)
+        return
+
+    uid = str(user.id)
+    if uid not in exchanges:
+        exchanges[uid] = {"total_amount": 0.0, "deals": 0}
+
+    exchanges[uid]["total_amount"] += amount
+    exchanges[uid]["deals"] += 1
+    save_json(EXCHANGE_FILE, exchanges)
+
     embed = discord.Embed(
-        title="💱 Record Exchange",
-        description="1️⃣ Select the user from dropdown.\n2️⃣ Enter Amount in USD.\n3️⃣ Enter Exchange Type (i2c or c2i).\n4️⃣ Press Record Exchange.",
-        color=discord.Color.green(),
+        title="✅ Exchange Recorded",
+        color=pick_color(amount),
         timestamp=datetime.now(tz=IST)
     )
-    await interaction.response.send_message(embed=embed, view=view)
+    embed.add_field(name="User", value=user.mention)
+    embed.add_field(name="Amount", value=f"${amount:,.2f}")
+    embed.add_field(name="Type", value=ex_type.upper())
+    embed.add_field(name="Total Deals", value=str(exchanges[uid]["deals"]))
+    embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+    await interaction.response.send_message(embed=embed)
 
+# ---------- /profile ----------
+@tree.command(name="profile", description="View a user's exchange profile")
+@app_commands.describe(user="Mention a user")
+async def profile(interaction: discord.Interaction, user: discord.Member):
+    data = exchanges.get(str(user.id), {"total_amount": 0.0, "deals": 0})
+    total = data["total_amount"]
+    deals = data["deals"]
+    avg = total / deals if deals else 0.0
+    embed = discord.Embed(
+        title=f"📊 Exchange Profile: {user.display_name}",
+        color=discord.Color.purple(),
+        timestamp=datetime.now(tz=IST)
+    )
+    embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
+    embed.add_field(name="Total Exchanged", value=f"${total:,.2f}", inline=True)
+    embed.add_field(name="Total Deals", value=str(deals), inline=True)
+    embed.add_field(name="Average Deal", value=f"${avg:,.2f}", inline=True)
+    embed.set_footer(text=f"Last updated: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+    await interaction.response.send_message(embed=embed)
 
 # ---------- /help ----------
 @tree.command(name="help", description="List all commands")
