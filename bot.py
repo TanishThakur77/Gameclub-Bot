@@ -261,12 +261,12 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     )
     await interaction.response.send_message(embed=embed)
     
-# ---------- /done (free-text exchange type) ----------
+# ---------- /done (enhanced with multiple follow-up messages) ----------
 @tree.command(name="done", description="Record a completed exchange")
 @app_commands.describe(
     user="Mention the user who did the exchange",
     amount="Amount in USD",
-    ex_type="Exchange type (write manually)"
+    ex_type="Exchange type (e.g., USDT to UPI)"
 )
 async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
     uid = str(user.id)
@@ -291,20 +291,28 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     await interaction.response.send_message(embed=embed)
 
     # 2️⃣ Second message: Thank you
-    await interaction.channel.send("🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
+    await interaction.channel.send(
+        "🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service."
+    )
 
     # 3️⃣ Third message: Vouch warning
-    await interaction.channel.send("📌 Copy Paste this vouch in this server only or get blacklisted!")
+    await interaction.channel.send(
+        "📌 Copy Paste this vouch in this server only or get blacklisted!"
+    )
 
     # 4️⃣ Fourth message: Invite link
     await interaction.channel.send("https://discord.gg/tuQeqYy4")
 
     # 5️⃣ Fifth message: +rep
-    await interaction.channel.send(f"+rep {user.id} Legit Exchange {ex_type} ${amount:,.2f}")
+    await interaction.channel.send(
+        f"+rep {user.id} Legit Exchange {ex_type} ${amount:,.2f}"
+    )
 
-    # 6️⃣ Sixth message: Feedback request
-    await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {interaction.user.mention} in {1371445182658252900}")
-
+    # 6️⃣ Sixth message: Feedback request in #feedback channel
+    feedback_channel_id = 1371445182658252900
+    await interaction.channel.send(
+        f"📝 Kindly give feedback for our exchanger {interaction.user.mention} in <#{feedback_channel_id}>"
+    )
 
 
 # ---------- /profile ----------
