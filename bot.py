@@ -1,224 +1,208 @@
-# gameclub_bot_full.py
 import os
-import json
-import asyncio
-from datetime import datetime, timedelta, timezone
-from threading import Thread
-
 import discord
 from discord import app_commands
-from discord.ext import commands, tasks
+from discord.ext import commands
+from discord.ui import Modal, TextInput, Select
+from datetime import datetime, timedelta, timezone
 from flask import Flask
+from threading import Thread
+import json
 
 # ---------- CONFIG ----------
-TOKEN = os.environ.get("TOKEN")  # or replace with "YOUR_TOKEN_HERE"
 IST = timezone(timedelta(hours=5, minutes=30))
+EXCHANGE_FILE = "exchanges.json"
+DATA_FILE = "user_slots.json"
 
-# Conversion defaults
 I2C_RATE = 95.0
 C2I_RATE_LOW = 91.0
 C2I_RATE_HIGH = 91.5
 C2I_THRESHOLD = 100.0
 
-# Files
-CRYPTO_FILE = "crypto_slots.json"
-UPI_FILE = "upi_slots.json"
-BACKUP_DIR = "backups"
+# ---------- Persistent Storage ----------
+def load_json(file_path, default):
+    if not os.path.exists(file_path):
+        return default
+    with open(file_path, "r") as f:
+        return json.load(f)
 
-# Ensure backup dir exists
-os.makedirs(BACKUP_DIR, exist_ok=True)
+def save_json(file_path, data):
+    with open(file_path, "w") as f:
+        json.dump(data, f, indent=4)
 
-# ---------- Helpers: JSON persistence ----------
-def safe_load_json(path, default):
-    try:
-        if os.path.exists(path):
-            with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-    except Exception as e:
-        print(f"Error loading {path}: {e}")
-    return default
+user_slots = load_json(DATA_FILE, {})
+exchanges = load_json(EXCHANGE_FILE, {})
 
-def safe_save_json(path, data):
-    try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(data, f, indent=4, ensure_ascii=False)
-    except Exception as e:
-        print(f"Error saving {path}: {e}")
-
-def backup_now():
-    timestamp = datetime.now(tz=IST).strftime("%Y%m%d_%H%M%S")
-    try:
-        # backup crypto
-        if os.path.exists(CRYPTO_FILE):
-            with open(CRYPTO_FILE, "r", encoding="utf-8") as src, open(os.path.join(BACKUP_DIR, f"crypto_{timestamp}.json"), "w", encoding="utf-8") as dst:
-                dst.write(src.read())
-        # backup upi
-        if os.path.exists(UPI_FILE):
-            with open(UPI_FILE, "r", encoding="utf-8") as src, open(os.path.join(BACKUP_DIR, f"upi_{timestamp}.json"), "w", encoding="utf-8") as dst:
-                dst.write(src.read())
-        print(f"Backup done: {timestamp}")
-    except Exception as e:
-        print("Backup error:", e)
-
-# Load persistent data
-user_crypto_slots = safe_load_json(CRYPTO_FILE, {})  # {user_id: {"1": {"address":..., "type":...}, ...}}
-user_upi_slots = safe_load_json(UPI_FILE, {})        # {user_id: {"1": "upi", ...}}
-
-# ---------- Flask keep-alive (optional) ----------
-app = Flask("gameclub_keepalive")
+# ---------- Flask Keep-Alive ----------
+app = Flask("")
 
 @app.route("/")
 def home():
-    return "✅ GameClub Bot is alive!"
+    return "✅ Bot is alive!"
 
-def run_flask():
+def run_web():
     port = int(os.environ.get("PORT", 8080))
     app.run(host="0.0.0.0", port=port)
 
-# Start Flask in a separate thread (safe to run even if not hosted on a platform that needs it)
-Thread(target=run_flask, daemon=True).start()
+Thread(target=run_web).start()
 
-# ---------- Bot setup ----------
+# ---------- Bot ----------
 intents = discord.Intents.default()
 intents.message_content = True
+intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ---------- Utility functions ----------
+# ---------- Helpers ----------
 def pretty_num(value):
-    try:
-        v = float(value)
-        return f"{int(v):,}" if v.is_integer() else f"{v:,.2f}"
-    except Exception:
-        return str(value)
+    return f"{int(value):,}" if float(value).is_integer() else f"{value:,.2f}"
 
 def pick_color(amount):
-    try:
-        a = float(amount)
-        if a < 500:
-            return discord.Color.green()
-        if a < 2000:
-            return discord.Color.blue()
-        return discord.Color.gold()
-    except Exception:
+    if amount < 500:
+        return discord.Color.green()
+    elif amount < 2000:
         return discord.Color.blue()
+    return discord.Color.gold()
 
-# ---------- Background backup task ----------
-@tasks.loop(hours=24)
-async def daily_backup_task():
-    backup_now()
+def get_user_slot(user_id):
+    if str(user_id) not in user_slots:
+        user_slots[str(user_id)] = {"crypto": {}, "upi": {}}
+    return user_slots[str(user_id)]
 
-# ---------- On ready ----------
+# ---------- On Ready ----------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
+    await bot.change_presence(activity=discord.Game("💱 Exchange Tracker"))
     try:
         await tree.sync()
-        print("🟢 Slash commands synced")
+        print("🟢 Slash commands synced!")
     except Exception as e:
-        print("⚠️ Slash sync failed:", e)
-    if not daily_backup_task.is_running():
-        daily_backup_task.start()
+        print(f"⚠️ Failed to sync: {e}")
 
-# ---------- Modals for slot entry ----------
-class AddCryptoModal(discord.ui.Modal):
-    def __init__(self, slot_num: int):
-        super().__init__(title=f"Crypto Slot {slot_num}")
-        self.slot_num = int(slot_num)
-        self.add_item(discord.ui.TextInput(label="Crypto Address", placeholder="Enter wallet address", required=True))
-        self.add_item(discord.ui.TextInput(label="Crypto Type", placeholder="e.g., USDT POLY, USDT BEP20, LTC", required=True))
+# ---------- /ping ----------
+@tree.command(name="ping", description="Check if bot is alive")
+async def ping(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="🏓 Pong!",
+        description="Bot is working ✅ All systems operational.",
+        color=discord.Color.green(),
+        timestamp=datetime.now(tz=IST)
+    )
+    await interaction.response.send_message(embed=embed)
 
-    async def on_submit(self, interaction: discord.Interaction):
-        user_id = str(interaction.user.id)
-        slots = user_crypto_slots.setdefault(user_id, {str(i): {"address": None, "type": None} for i in range(1,6)})
-        slots[str(self.slot_num)]["address"] = self.children[0].value.strip()
-        slots[str(self.slot_num)]["type"] = self.children[1].value.strip()
-        safe_save_json(CRYPTO_FILE, user_crypto_slots)
-        await interaction.response.send_message(f"✅ Crypto slot {self.slot_num} saved.", ephemeral=True)
-
-class AddUPIModal(discord.ui.Modal):
-    def __init__(self, slot_num: int):
-        super().__init__(title=f"UPI Slot {slot_num}")
-        self.slot_num = int(slot_num)
-        self.add_item(discord.ui.TextInput(label="UPI ID", placeholder="example@bank", required=True))
-
-    async def on_submit(self, interaction: discord.Interaction):
-        user_id = str(interaction.user.id)
-        slots = user_upi_slots.setdefault(user_id, {str(i): None for i in range(1,6)})
-        slots[str(self.slot_num)] = self.children[0].value.strip()
-        safe_save_json(UPI_FILE, user_upi_slots)
-        await interaction.response.send_message(f"✅ UPI slot {self.slot_num} saved.", ephemeral=True)
-
-# ---------- Conversion commands ----------
+# ---------- /i2c ----------
 @tree.command(name="i2c", description="Convert INR → USD")
 @app_commands.describe(amount="Amount in INR")
 async def i2c(interaction: discord.Interaction, amount: float):
     usd = amount / I2C_RATE
+    color = pick_color(amount)
     ist_now = datetime.now(tz=IST)
-    embed = discord.Embed(title="💱 INR → USD Conversion", color=pick_color(amount), timestamp=ist_now)
-    embed.add_field(name="Amount (INR)", value=f"₹ {pretty_num(amount)}", inline=False)
-    embed.add_field(name="Converted (USD)", value=f"$ {pretty_num(usd)}", inline=False)
-    embed.add_field(name="Rate used", value=f"{I2C_RATE} INR per $", inline=False)
+    embed = discord.Embed(
+        title="💱 INR → USD Conversion",
+        color=color,
+        timestamp=ist_now
+    )
+    embed.add_field(name="💸 Amount in INR", value=f"**₹ {pretty_num(amount)}**")
+    embed.add_field(name="💵 Converted USD", value=f"**$ {pretty_num(usd)}**")
+    embed.add_field(name="⚖️ Rate Used", value=f"**{I2C_RATE} INR per $**")
     embed.set_footer(text=f"Time (IST): {ist_now.strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
 
+# ---------- /c2i ----------
 @tree.command(name="c2i", description="Convert USD → INR")
 @app_commands.describe(amount="Amount in USD")
 async def c2i(interaction: discord.Interaction, amount: float):
     rate = C2I_RATE_LOW if amount < C2I_THRESHOLD else C2I_RATE_HIGH
     inr = amount * rate
+    color = pick_color(inr)
     ist_now = datetime.now(tz=IST)
-    embed = discord.Embed(title="💱 USD → INR Conversion", color=pick_color(inr), timestamp=ist_now)
-    embed.add_field(name="Amount (USD)", value=f"$ {pretty_num(amount)}", inline=False)
-    embed.add_field(name="Converted (INR)", value=f"₹ {pretty_num(inr)}", inline=False)
-    embed.add_field(name="Rate used", value=f"{rate} INR per $", inline=False)
+    embed = discord.Embed(
+        title="💱 USD → INR Conversion",
+        color=color,
+        timestamp=ist_now
+    )
+    embed.add_field(name="💵 Amount in USD", value=f"**$ {pretty_num(amount)}**")
+    embed.add_field(name="💸 Converted INR", value=f"**₹ {pretty_num(inr)}**")
+    embed.add_field(name="⚖️ Rate Used", value=f"**{rate} INR per $**")
     embed.set_footer(text=f"Time (IST): {ist_now.strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
 
-# ---------- Admin: setrate ----------
-@tree.command(name="setrate", description="Admin only: set conversion rates")
-@app_commands.describe(rate_type="Which rate to set", new_rate="New numeric rate")
+# ---------- /setrate ----------
+@tree.command(name="setrate", description="Set conversion rates (Admin only)")
+@app_commands.describe(new_rate="Enter new rate")
 @app_commands.choices(rate_type=[
     app_commands.Choice(name="I2C (INR → USD)", value="i2c"),
-    app_commands.Choice(name="C2I Low (USD < threshold)", value="c2i_low"),
-    app_commands.Choice(name="C2I High (USD ≥ threshold)", value="c2i_high")
+    app_commands.Choice(name="C2I Low (USD < 100)", value="c2i_low"),
+    app_commands.Choice(name="C2I High (USD ≥ 100)", value="c2i_high")
 ])
 async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choice[str], new_rate: float):
     global I2C_RATE, C2I_RATE_LOW, C2I_RATE_HIGH
     if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("🚫 Only admins can use this.", ephemeral=True)
+        await interaction.response.send_message("🚫 Only admins can change rates.", ephemeral=True)
         return
     if rate_type.value == "i2c":
         I2C_RATE = new_rate
-        title = "I2C rate updated"
+        title = "💱 I2C Rate Updated"
     elif rate_type.value == "c2i_low":
         C2I_RATE_LOW = new_rate
-        title = "C2I low rate updated"
-    else:
+        title = "💸 C2I Low Rate Updated"
+    elif rate_type.value == "c2i_high":
         C2I_RATE_HIGH = new_rate
-        title = "C2I high rate updated"
-    await interaction.response.send_message(f"✅ {title}: {new_rate}", ephemeral=True)
+        title = "💰 C2I High Rate Updated"
+    embed = discord.Embed(title=title, description=f"New rate: **{new_rate}**", color=discord.Color.gold())
+    embed.set_footer(text=f"Updated by {interaction.user.display_name}")
+    await interaction.response.send_message(embed=embed)
 
-# ---------- Add / Update slot commands (open modals) ----------
-@tree.command(name="add-addy", description="Add or replace a crypto slot (address + type)")
+# ---------- Add / Update Slots ----------
+class AddSlotModal(discord.ui.Modal):
+    def __init__(self, slot_type: str, slot_num: int):
+        super().__init__(title=f"{slot_type.capitalize()} Slot {slot_num}")
+        self.slot_type = slot_type
+        self.slot_num = slot_num
+        if slot_type == "crypto":
+            self.add_item(discord.ui.TextInput(label="Address", placeholder="Enter your crypto address", required=True))
+            self.add_item(discord.ui.TextInput(label="Type", placeholder="e.g., USDT POLY, LTC", required=True))
+        else:
+            self.add_item(discord.ui.TextInput(label="UPI ID", placeholder="Enter your UPI ID", required=True))
+
+    async def on_submit(self, interaction: discord.Interaction):
+        uid = str(interaction.user.id)
+        if uid not in user_slots:
+            user_slots[uid] = {"crypto": {}, "upi": {}}
+        slots = user_slots[uid][self.slot_type]
+        if self.slot_type == "crypto":
+            slots[str(self.slot_num)] = {
+                "address": self.children[0].value,
+                "type": self.children[1].value
+            }
+            msg = f"✅ {self.slot_type.capitalize()} Slot {self.slot_num} Updated."
+        else:
+            slots[str(self.slot_num)] = {"upi": self.children[0].value}
+            msg = f"✅ {self.slot_type.upper()} Slot {self.slot_num} Updated."
+        save_json(DATA_FILE, user_slots)
+        await interaction.response.send_message(msg, ephemeral=True)
+
+# ---------- /add-addy ----------
+@tree.command(name="add-addy", description="Add/replace crypto slot")
 @app_commands.describe(slot_num="Slot number 1-5")
 async def add_addy(interaction: discord.Interaction, slot_num: int):
-    if not 1 <= slot_num <= 5:
-        await interaction.response.send_message("❌ Invalid slot number. Choose 1-5.", ephemeral=True)
+    if slot_num < 1 or slot_num > 5:
+        await interaction.response.send_message("❌ Invalid slot! Choose 1-5.", ephemeral=True)
         return
-    await interaction.response.send_modal(AddCryptoModal(slot_num))
+    await interaction.response.send_modal(AddSlotModal("crypto", slot_num))
 
-@tree.command(name="add-upi", description="Add or replace a UPI slot")
+# ---------- /add-upi ----------
+@tree.command(name="add-upi", description="Add/replace UPI slot")
 @app_commands.describe(slot_num="Slot number 1-5")
 async def add_upi(interaction: discord.Interaction, slot_num: int):
-    if not 1 <= slot_num <= 5:
-        await interaction.response.send_message("❌ Invalid slot number. Choose 1-5.", ephemeral=True)
+    if slot_num < 1 or slot_num > 5:
+        await interaction.response.send_message("❌ Invalid slot! Choose 1-5.", ephemeral=True)
         return
-    await interaction.response.send_modal(AddUPIModal(slot_num))
+    await interaction.response.send_modal(AddSlotModal("upi", slot_num))
 
-# ---------- Manage-slot (update/delete user's own slots) ----------
-@tree.command(name="manage-slot", description="Update or delete your slot (per-user)")
-@app_commands.describe(action="Update or Delete", slot_type="Crypto or UPI", slot_num="Slot number 1-5")
+# ---------- /manage-slot ----------
+@tree.command(name="manage-slot", description="Update or delete any slot")
+@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
 @app_commands.choices(action=[
     app_commands.Choice(name="Update", value="update"),
     app_commands.Choice(name="Delete", value="delete")
@@ -228,31 +212,23 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
     app_commands.Choice(name="UPI", value="upi")
 ])
 async def manage_slot(interaction: discord.Interaction, action: app_commands.Choice[str], slot_type: app_commands.Choice[str], slot_num: int):
-    if not 1 <= slot_num <= 5:
-        await interaction.response.send_message("❌ Invalid slot number. Choose 1-5.", ephemeral=True)
+    uid = str(interaction.user.id)
+    if uid not in user_slots:
+        user_slots[uid] = {"crypto": {}, "upi": {}}
+    slots = user_slots[uid][slot_type.value]
+    if slot_num < 1 or slot_num > 5:
+        await interaction.response.send_message("❌ Invalid slot! Choose 1-5.", ephemeral=True)
         return
-
-    user_id = str(interaction.user.id)
-    if slot_type.value == "crypto":
-        slots = user_crypto_slots.setdefault(user_id, {str(i): {"address": None, "type": None} for i in range(1,6)})
-        if action.value == "delete":
-            slots[str(slot_num)] = {"address": None, "type": None}
-            safe_save_json(CRYPTO_FILE, user_crypto_slots)
-            await interaction.response.send_message(f"✅ Crypto slot {slot_num} deleted.", ephemeral=True)
-        else:
-            await interaction.response.send_modal(AddCryptoModal(slot_num))
+    if action.value == "delete":
+        slots.pop(str(slot_num), None)
+        save_json(DATA_FILE, user_slots)
+        await interaction.response.send_message(f"✅ {slot_type.value.capitalize()} Slot {slot_num} deleted.", ephemeral=True)
     else:
-        slots = user_upi_slots.setdefault(user_id, {str(i): None for i in range(1,6)})
-        if action.value == "delete":
-            slots[str(slot_num)] = None
-            safe_save_json(UPI_FILE, user_upi_slots)
-            await interaction.response.send_message(f"✅ UPI slot {slot_num} deleted.", ephemeral=True)
-        else:
-            await interaction.response.send_modal(AddUPIModal(slot_num))
+        await interaction.response.send_modal(AddSlotModal(slot_type.value, slot_num))
 
-# ---------- Receiving-method: embed then plain address ----------
-@tree.command(name="receiving-method", description="Show embed then plain address/UPI (per-user)")
-@app_commands.describe(slot_type="Crypto or UPI", slot_num="Slot number 1-5")
+# ---------- /receiving-method ----------
+@tree.command(name="receiving-method", description="Select crypto or UPI slot to pay")
+@app_commands.describe(slot_type="Type", slot_num="Slot number 1-5")
 @app_commands.choices(slot_type=[
     app_commands.Choice(name="Crypto", value="crypto"),
     app_commands.Choice(name="UPI", value="upi")
@@ -265,97 +241,128 @@ async def manage_slot(interaction: discord.Interaction, action: app_commands.Cho
     app_commands.Choice(name="5", value=5)
 ])
 async def receiving_method(interaction: discord.Interaction, slot_type: app_commands.Choice[str], slot_num: app_commands.Choice[int]):
-    user_id = str(interaction.user.id)
-    ist_now = datetime.now(tz=IST)
-
+    uid = str(interaction.user.id)
+    slots = get_user_slot(uid)[slot_type.value]
+    value = slots.get(str(slot_num.value))
+    if not value:
+        await interaction.response.send_message("❌ This slot is empty.", ephemeral=True)
+        return
     if slot_type.value == "crypto":
-        slots = user_crypto_slots.get(user_id, {})
-        slot_data = slots.get(str(slot_num.value), {"address": "Empty", "type": "Empty"})
-        address = slot_data.get("address", "Empty")
-        addr_type = slot_data.get("type", "Empty")
-        embed = discord.Embed(title="📌 Payment Method", color=discord.Color.blue(), timestamp=ist_now)
-        embed.add_field(name="💰 Payment Address", value=f"`{address}`", inline=False)
-        embed.add_field(name="🔹 Address Type", value=f"`{addr_type}`", inline=False)
-        embed.set_footer(text=f"Time: {ist_now.strftime('%I:%M %p, %d %b %Y')}")
+        desc = f"💰 **{value['address']}**\nType: **{value['type']}**"
     else:
-        slots = user_upi_slots.get(user_id, {})
-        address = slots.get(str(slot_num.value), "Empty")
-        embed = discord.Embed(title="📌 Payment Method", color=discord.Color.blue(), timestamp=ist_now)
-        embed.add_field(name="💰 Payment UPI", value=f"`{address}`", inline=False)
-        embed.set_footer(text=f"Time: {ist_now.strftime('%I:%M %p, %d %b %Y')}")
-
-    # Send embed first
+        desc = f"💰 **{value['upi']}**"
+    embed = discord.Embed(
+        title="📌 Payment Info",
+        description=desc,
+        color=discord.Color.blue(),
+        timestamp=datetime.now(tz=IST)
+    )
     await interaction.response.send_message(embed=embed)
-    # Then send plain address (only the address/UPI)
-    await interaction.followup.send(f"{address}")
 
-# ---------- Preview: show all saved slots for the user ----------
-@tree.command(name="preview", description="Preview all your saved crypto & UPI slots (per-user)")
-async def preview(interaction: discord.Interaction):
-    user_id = str(interaction.user.id)
-    crypto = user_crypto_slots.get(user_id, {})
-    upi = user_upi_slots.get(user_id, {})
+# ---------- /done command with dropdown ----------
+class DoneDropdown(discord.ui.Select):
+    def __init__(self, guild):
+        options = [discord.SelectOption(label=member.display_name, value=str(member.id)) for member in guild.members if not member.bot]
+        super().__init__(placeholder="Select user", min_values=1, max_values=1, options=options)
+        self.guild = guild
 
-    embed = discord.Embed(title=f"📂 Saved Slots — {interaction.user.display_name}", color=discord.Color.gold(), timestamp=datetime.now(tz=IST))
-    # Crypto slots
-    for i in range(1,6):
-        s = crypto.get(str(i), {"address": None, "type": None})
-        addr = s.get("address") or "Empty"
-        typ = s.get("type") or "Empty"
-        embed.add_field(name=f"Crypto Slot {i}", value=f"Address: `{addr}`\nType: `{typ}`", inline=False)
+    async def callback(self, interaction: discord.Interaction):
+        selected_user_id = self.values[0]
+        await interaction.response.send_modal(DoneModal(self.guild, selected_user_id))
 
-    # UPI slots
-    for i in range(1,6):
-        u = upi.get(str(i), None) or "Empty"
-        embed.add_field(name=f"UPI Slot {i}", value=f"`{u}`", inline=False)
+class DoneModal(Modal):
+    def __init__(self, guild, user_id):
+        super().__init__(title="Record Exchange")
+        self.guild = guild
+        self.user_id = user_id
+        self.add_item(TextInput(label="Amount (USD)", placeholder="Enter amount in $", required=True))
+        self.add_item(TextInput(label="Exchange Type (i2c/c2i)", placeholder="i2c or c2i", required=True))
 
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            amount = float(self.children[0].value)
+            ex_type = self.children[1].value.lower()
+            if ex_type not in ["i2c", "c2i"]:
+                await interaction.response.send_message("❌ Exchange type must be i2c or c2i.", ephemeral=True)
+                return
+            if self.user_id not in exchanges:
+                exchanges[self.user_id] = {"total_amount": 0.0, "deals": 0}
+            exchanges[self.user_id]["total_amount"] += amount
+            exchanges[self.user_id]["deals"] += 1
+            save_json(EXCHANGE_FILE, exchanges)
+            user_obj = self.guild.get_member(int(self.user_id))
+            embed = discord.Embed(
+                title="✅ Exchange Recorded!",
+                color=pick_color(amount),
+                timestamp=datetime.now(tz=IST)
+            )
+            embed.add_field(name="User", value=user_obj.mention if user_obj else self.user_id, inline=True)
+            embed.add_field(name="Amount", value=f"${amount:,.2f}", inline=True)
+            embed.add_field(name="Type", value=ex_type.upper(), inline=True)
+            embed.add_field(name="Total Deals", value=str(exchanges[self.user_id]["deals"]), inline=True)
+            embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-# ---------- Detailed Help ----------
-@tree.command(name="help", description="Show detailed help for all commands")
-async def help_command(interaction: discord.Interaction):
-    ist_now = datetime.now(tz=IST)
-    embed = discord.Embed(title="📖 GameClub Bot — Detailed Help", color=discord.Color.green(), timestamp=ist_now)
-    embed.add_field(name="/add-addy <slot_num>", value="Open modal to save crypto address + type to your slot. (slots 1-5). Example: `/add-addy slot_num:1`", inline=False)
-    embed.add_field(name="/add-upi <slot_num>", value="Open modal to save UPI ID to your slot. (slots 1-5). Example: `/add-upi slot_num:2`", inline=False)
-    embed.add_field(name="/manage-slot", value="Update (opens modal) or Delete your slot. Example: `/manage-slot action:delete slot_type:crypto slot_num:1`", inline=False)
-    embed.add_field(name="/receiving-method", value="Shows embed with saved info then sends a plain address/UPI. Example: `/receiving-method slot_type:crypto slot_num:1`", inline=False)
-    embed.add_field(name="/preview", value="Preview all 5 crypto + 5 UPI slots you saved.", inline=False)
-    embed.add_field(name="/i2c <amount>", value="Convert INR → USD.", inline=False)
-    embed.add_field(name="/c2i <amount>", value="Convert USD → INR.", inline=False)
-    embed.add_field(name="/setrate", value="Admin only: change conversion rates. Example: `/setrate rate_type:I2C new_rate:96`", inline=False)
-    embed.add_field(name="/command", value="Plain list of commands (ephemeral).", inline=False)
-    embed.set_footer(text="All slots are per-user and saved persistently to JSON files.")
-    await interaction.response.send_message(embed=embed, ephemeral=True)
+class DoneView(discord.ui.View):
+    def __init__(self, guild):
+        super().__init__()
+        self.add_item(DoneDropdown(guild))
 
-# ---------- Plain command list ----------
-@tree.command(name="command", description="List all commands in plain text")
-async def command_list(interaction: discord.Interaction):
-    commands_text = """**These are the Commands for The GameClub Bot:**
-/ping
-/i2c
-/c2i
-/setrate
-/add-addy
-/add-upi
-/manage-slot
-/receiving-method
-/preview
-/help
-/command
-"""
-    await interaction.response.send_message(commands_text, ephemeral=True)
+@tree.command(name="done", description="Record a completed exchange")
+async def done(interaction: discord.Interaction):
+    view = DoneView(interaction.guild)
+    await interaction.response.send_message("Select the user for this exchange:", view=view, ephemeral=True)
 
-# ---------- Simple ping ----------
-@tree.command(name="ping", description="Check if bot is online")
-async def ping_simple(interaction: discord.Interaction):
-    await interaction.response.send_message("🏓 Pong! Bot is online.", ephemeral=True)
+# ---------- /profile ----------
+@tree.command(name="profile", description="View a user's exchange profile")
+@app_commands.describe(user="Mention a user")
+async def profile(interaction: discord.Interaction, user: discord.Member):
+    data = exchanges.get(str(user.id), {"total_amount": 0.0, "deals": 0})
+    total = data["total_amount"]
+    deals = data["deals"]
+    avg = total / deals if deals else 0.0
+    embed = discord.Embed(
+        title=f"📊 Exchange Profile: {user.display_name}",
+        color=discord.Color.purple(),
+        timestamp=datetime.now(tz=IST)
+    )
+    embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
+    embed.add_field(name="Total Exchanged", value=f"${total:,.2f}", inline=True)
+    embed.add_field(name="Total Deals", value=str(deals), inline=True)
+    embed.add_field(name="Average Deal", value=f"${avg:,.2f}", inline=True)
+    embed.set_footer(text=f"Last updated: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+    await interaction.response.send_message(embed=embed)
 
-# ---------- Run ----------
+# ---------- /help ----------
+@tree.command(name="help", description="List all commands and their description")
+async def help_cmd(interaction: discord.Interaction):
+    embed = discord.Embed(
+        title="📜 GameClub Bot Commands",
+        description="Here is a list of all available commands with description:",
+        color=discord.Color.gold(),
+        timestamp=datetime.now(tz=IST)
+    )
+    commands_list = [
+        ("/ping", "Check if bot is alive"),
+        ("/i2c", "Convert INR → USD"),
+        ("/c2i", "Convert USD → INR"),
+        ("/setrate", "Set conversion rates (Admin only)"),
+        ("/add-addy", "Add or replace crypto slot (1-5)"),
+        ("/add-upi", "Add or replace UPI slot (1-5)"),
+        ("/manage-slot", "Update or delete any slot"),
+        ("/receiving-method", "View your saved crypto/UPI"),
+        ("/done", "Record a completed exchange"),
+        ("/profile", "View a user's exchange profile"),
+    ]
+    for cmd, desc in commands_list:
+        embed.add_field(name=cmd, value=desc, inline=False)
+    await interaction.response.send_message(embed=embed)
+
+# ---------- Run Bot ----------
+TOKEN = os.environ.get("TOKEN")
 if not TOKEN:
-    print("❌ TOKEN not found. Set the TOKEN environment variable.")
+    print("❌ TOKEN not found!")
 else:
-    try:
-        bot.run(TOKEN)
-    except Exception as e:
-        print("Error running bot:", e)
+    bot.run(TOKEN)
