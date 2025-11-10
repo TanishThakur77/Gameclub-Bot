@@ -2,7 +2,7 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import View, TextInput
+from discord.ui import TextInput, Modal
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
@@ -260,23 +260,22 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     )
     await interaction.response.send_message(embed=embed)
 
-# ---------- /done (all-in-one, manual ex_type) ----------
+# ---------- /done (all-in-one) ----------
 @tree.command(name="done", description="Record a completed exchange")
 @app_commands.describe(
     user="Mention the user who did the exchange",
     amount="Amount in USD",
-    ex_type="Exchange type (manual, e.g. USDT → UPI)"
+    ex_type="Exchange type (fill manually, e.g., USDT → UPI)"
 )
 async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
     uid = str(user.id)
     if uid not in exchanges:
         exchanges[uid] = {"total_amount": 0.0, "deals": 0}
-
     exchanges[uid]["total_amount"] += amount
     exchanges[uid]["deals"] += 1
     save_json(EXCHANGE_FILE, exchanges)
 
-    # 1️⃣ Confirmation embed
+    # 1️⃣ Confirmation
     embed = discord.Embed(
         title="✅ Exchange Recorded",
         color=pick_color(amount),
@@ -289,7 +288,7 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
 
-    # 2️⃣ Thank you msg
+    # 2️⃣ Thank you
     await interaction.channel.send("🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
 
     # 3️⃣ Vouch warning
@@ -308,16 +307,14 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
 
 # ---------- /adjust-total ----------
 @tree.command(name="adjust-total", description="Adjust total exchanged amount for a user")
-@app_commands.describe(user="User to adjust", new_total="New total amount in USD")
-async def adjust_total(interaction: discord.Interaction, user: discord.Member, new_total: float):
+@app_commands.describe(user="Mention a user", adjust_amount="Amount to add or subtract (use negative to decrease)")
+async def adjust_total(interaction: discord.Interaction, user: discord.Member, adjust_amount: float):
     uid = str(user.id)
     if uid not in exchanges:
-        await interaction.response.send_message("❌ User has no exchange history.", ephemeral=True)
-        return
-    old_total = exchanges[uid]["total_amount"]
-    exchanges[uid]["total_amount"] = new_total
+        exchanges[uid] = {"total_amount": 0.0, "deals": 0}
+    exchanges[uid]["total_amount"] += adjust_amount
     save_json(EXCHANGE_FILE, exchanges)
-    await interaction.response.send_message(f"✅ Adjusted {user.display_name}'s total from ${old_total:,.2f} → ${new_total:,.2f}")
+    await interaction.response.send_message(f"✅ Total adjusted. New total: ${exchanges[uid]['total_amount']:,.2f}")
 
 # ---------- /profile ----------
 @tree.command(name="profile", description="View a user's exchange profile")
@@ -339,8 +336,9 @@ async def profile(interaction: discord.Interaction, user: discord.Member):
     embed.set_footer(text=f"Last updated: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
 
-# ---------- Help embed function ----------
-def get_help_embed():
+# ---------- /help ----------
+@tree.command(name="help", description="List all commands")
+async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📜 GameClub Bot Commands",
         description="These are the available commands:",
@@ -357,26 +355,18 @@ def get_help_embed():
         ("/manage-slot", "Update or delete any slot"),
         ("/receiving-method", "View your saved crypto/UPI"),
         ("/done", "Record a completed exchange"),
-        ("/adjust-total", "Adjust the total exchanged amount"),
+        ("/adjust-total", "Adjust total exchanged amount for a user"),
         ("/profile", "View a user's exchange profile"),
-        ("/help", "Show this help message"),
-        ("/commands", "Show this commands list")
+        ("/help", "Show this help message")
     ]
     for c,d in cmds:
         embed.add_field(name=c, value=d, inline=False)
-    return embed
-
-# ---------- /help ----------
-@tree.command(name="help", description="List all commands")
-async def help_cmd(interaction: discord.Interaction):
-    embed = get_help_embed()
     await interaction.response.send_message(embed=embed)
 
 # ---------- /commands ----------
-@tree.command(name="commands", description="Show all commands")
+@tree.command(name="commands", description="Alias for /help")
 async def commands_cmd(interaction: discord.Interaction):
-    embed = get_help_embed()
-    await interaction.response.send_message(embed=embed)
+    await help_cmd(interaction)
 
 # ---------- Run Bot ----------
 TOKEN = os.environ.get("TOKEN")
