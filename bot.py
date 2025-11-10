@@ -348,7 +348,12 @@ async def adjust_total(interaction: discord.Interaction, user: discord.Member, a
         exchanges[uid] = {"total_amount": 0.0, "deals": 0}
 
     old_total = exchanges[uid]["total_amount"]
-    exchanges[uid]["total_amount"] += amount
+    new_total = old_total + amount
+    if new_total < 0:
+        new_total = 0.0  # prevent negative total
+        amount = -old_total  # show the actual adjustment
+
+    exchanges[uid]["total_amount"] = new_total
     save_json(EXCHANGE_FILE, exchanges)
     
     embed = discord.Embed(
@@ -359,11 +364,12 @@ async def adjust_total(interaction: discord.Interaction, user: discord.Member, a
     embed.add_field(name="User", value=user.mention)
     embed.add_field(name="Old Total", value=f"${old_total:,.2f}", inline=True)
     embed.add_field(name="Adjustment", value=f"${amount:,.2f}", inline=True)
-    embed.add_field(name="New Total", value=f"${exchanges[uid]['total_amount']:,.2f}", inline=True)
+    embed.add_field(name="New Total", value=f"${new_total:,.2f}", inline=True)
     embed.add_field(name="Reason", value=reason, inline=False)
     embed.set_footer(text=f"Adjusted by {interaction.user.display_name} at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     
     await interaction.response.send_message(embed=embed)
+
 
 
 # ---------- /help ----------
