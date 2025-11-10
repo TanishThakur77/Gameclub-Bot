@@ -260,11 +260,13 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     )
     await interaction.response.send_message(embed=embed)
 
-# ---------- /done - fully interactive in chat ----------
+# ---------- /done - fully in-message interaction ----------
 class DoneExchangeView(View):
     def __init__(self, guild):
         super().__init__(timeout=None)
         self.guild = guild
+
+        # Dropdown to select user
         self.user_select = Select(
             placeholder="Select user",
             min_values=1,
@@ -273,69 +275,70 @@ class DoneExchangeView(View):
         )
         self.user_select.callback = self.user_callback
         self.add_item(self.user_select)
+
+        # Text inputs
         self.amount_input = TextInput(label="Amount (USD)", placeholder="Enter USD amount", required=True, style=discord.TextStyle.short)
         self.type_input = TextInput(label="Exchange Type", placeholder="i2c or c2i", required=True, style=discord.TextStyle.short)
 
+        # Submit button
+        self.submit_btn = Button(label="Record Exchange", style=discord.ButtonStyle.green)
+        self.submit_btn.callback = self.submit_callback
+        self.add_item(self.submit_btn)
+
+        self.selected_user_id = None
+        self.amount = None
+        self.ex_type = None
+
     async def user_callback(self, interaction: discord.Interaction):
-        await interaction.response.send_modal(DoneExchangeModal(self.user_select.values[0]))
+        self.selected_user_id = self.user_select.values[0]
+        await interaction.response.send_message(f"Selected user! Now enter Amount and Exchange Type and press Record Exchange.", ephemeral=True)
 
-class DoneExchangeModal(Modal):
-    def __init__(self, user_id):
-        super().__init__(title="Record Exchange")
-        self.user_id = user_id
-        self.add_item(TextInput(label="Amount (USD)", placeholder="Enter USD amount", required=True))
-        self.add_item(TextInput(label="Exchange Type", placeholder="i2c or c2i", required=True))
-
-    async def on_submit(self, interaction: discord.Interaction):
+    async def submit_callback(self, interaction: discord.Interaction):
+        if not self.selected_user_id:
+            await interaction.response.send_message("❌ Please select a user first!", ephemeral=True)
+            return
+        # Get input values
+        self.amount = self.amount_input.value
+        self.ex_type = self.type_input.value.lower()
         try:
-            amount = float(self.children[0].value)
-            ex_type = self.children[1].value.lower()
-            if ex_type not in ["i2c", "c2i"]:
-                await interaction.response.send_message("❌ Type must be i2c or c2i.", ephemeral=True)
+            self.amount = float(self.amount)
+            if self.ex_type not in ["i2c", "c2i"]:
+                await interaction.response.send_message("❌ Exchange type must be i2c or c2i!", ephemeral=True)
                 return
-            if self.user_id not in exchanges:
-                exchanges[self.user_id] = {"total_amount": 0.0, "deals": 0}
-            exchanges[self.user_id]["total_amount"] += amount
-            exchanges[self.user_id]["deals"] += 1
+
+            if self.selected_user_id not in exchanges:
+                exchanges[self.selected_user_id] = {"total_amount": 0.0, "deals": 0}
+            exchanges[self.selected_user_id]["total_amount"] += self.amount
+            exchanges[self.selected_user_id]["deals"] += 1
             save_json(EXCHANGE_FILE, exchanges)
-            member_obj = interaction.guild.get_member(int(self.user_id))
+
+            member_obj = interaction.guild.get_member(int(self.selected_user_id))
             embed = discord.Embed(
                 title="✅ Exchange Recorded",
-                color=pick_color(amount),
+                color=pick_color(self.amount),
                 timestamp=datetime.now(tz=IST)
             )
-            embed.add_field(name="User", value=member_obj.mention if member_obj else self.user_id)
-            embed.add_field(name="Amount", value=f"${amount:,.2f}")
-            embed.add_field(name="Type", value=ex_type.upper())
-            embed.add_field(name="Total Deals", value=str(exchanges[self.user_id]["deals"]))
+            embed.add_field(name="User", value=member_obj.mention if member_obj else self.selected_user_id)
+            embed.add_field(name="Amount", value=f"${self.amount:,.2f}")
+            embed.add_field(name="Type", value=self.ex_type.upper())
+            embed.add_field(name="Total Deals", value=str(exchanges[self.selected_user_id]["deals"]))
             embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
             await interaction.response.send_message(embed=embed)
-        except Exception as e:
-            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
+
+        except ValueError:
+            await interaction.response.send_message("❌ Amount must be a number!", ephemeral=True)
 
 @tree.command(name="done", description="Record a completed exchange")
 async def done(interaction: discord.Interaction):
-    await interaction.response.send_modal(DoneExchangeModal("0"))  # placeholder, will fill via modal
-
-# ---------- /profile ----------
-@tree.command(name="profile", description="View a user's exchange profile")
-@app_commands.describe(user="Mention a user")
-async def profile(interaction: discord.Interaction, user: discord.Member):
-    data = exchanges.get(str(user.id), {"total_amount": 0.0, "deals": 0})
-    total = data["total_amount"]
-    deals = data["deals"]
-    avg = total / deals if deals else 0.0
+    view = DoneExchangeView(interaction.guild)
     embed = discord.Embed(
-        title=f"📊 Exchange Profile: {user.display_name}",
-        color=discord.Color.purple(),
+        title="💱 Record Exchange",
+        description="1️⃣ Select the user from dropdown.\n2️⃣ Enter Amount in USD.\n3️⃣ Enter Exchange Type (i2c or c2i).\n4️⃣ Press Record Exchange.",
+        color=discord.Color.green(),
         timestamp=datetime.now(tz=IST)
     )
-    embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
-    embed.add_field(name="Total Exchanged", value=f"${total:,.2f}", inline=True)
-    embed.add_field(name="Total Deals", value=str(deals), inline=True)
-    embed.add_field(name="Average Deal", value=f"${avg:,.2f}", inline=True)
-    embed.set_footer(text=f"Last updated: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-    await interaction.response.send_message(embed=embed)
+    await interaction.response.send_message(embed=embed, view=view)
+
 
 # ---------- /help ----------
 @tree.command(name="help", description="List all commands")
