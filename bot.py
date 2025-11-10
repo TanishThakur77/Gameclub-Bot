@@ -2,6 +2,7 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
+from discord.ui import TextInput, Modal
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
@@ -154,8 +155,6 @@ async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choi
     await interaction.response.send_message(embed=embed)
 
 # ---------- Add / Update Slots ----------
-from discord.ui import Modal, TextInput
-
 class AddSlotModal(Modal):
     def __init__(self, slot_type: str, slot_num: int):
         super().__init__(title=f"{slot_type.capitalize()} Slot {slot_num}")
@@ -203,6 +202,8 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
     await interaction.response.send_modal(AddSlotModal("upi", slot_num))
 
 # ---------- /manage-slot ----------
+@tree.command(name="manage-slot", description="Update or delete any slot")
+@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
 @app_commands.choices(action=[
     app_commands.Choice(name="Update", value="update"),
     app_commands.Choice(name="Delete", value="delete")
@@ -211,8 +212,6 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
     app_commands.Choice(name="Crypto", value="crypto"),
     app_commands.Choice(name="UPI", value="upi")
 ])
-@tree.command(name="manage-slot", description="Update or delete any slot")
-@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
 async def manage_slot(interaction: discord.Interaction, action: app_commands.Choice[str], slot_type: app_commands.Choice[str], slot_num: int):
     uid = str(interaction.user.id)
     if uid not in user_slots:
@@ -260,13 +259,13 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
         timestamp=datetime.now(tz=IST)
     )
     await interaction.response.send_message(embed=embed)
-    
-# ---------- /done (enhanced with multiple follow-up messages) ----------
+
+# ---------- /done ----------
 @tree.command(name="done", description="Record a completed exchange")
 @app_commands.describe(
     user="Mention the user who did the exchange",
     amount="Amount in USD",
-    ex_type="Exchange type (e.g., USDT to UPI)"
+    ex_type="Exchange type (e.g., USDT → UPI, UPI → LTC)"
 )
 async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
     uid = str(user.id)
@@ -290,30 +289,20 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
 
-    # 2️⃣ Second message: Thank you
-    await interaction.channel.send(
-        "🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service."
-    )
+    # 2️⃣ Thank you
+    await interaction.channel.send("🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
 
-    # 3️⃣ Third message: Vouch warning
-    await interaction.channel.send(
-        "📌 Copy Paste this vouch in this server only or get blacklisted!"
-    )
+    # 3️⃣ Vouch warning
+    await interaction.channel.send("📌 Copy Paste this vouch in this server only or get blacklisted!")
 
-    # 4️⃣ Fourth message: Invite link
+    # 4️⃣ Invite link
     await interaction.channel.send("https://discord.gg/tuQeqYy4")
 
-    # 5️⃣ Fifth message: +rep
-    await interaction.channel.send(
-        f"+rep {user.id} Legit Exchange {ex_type} ${amount:,.2f}"
-    )
+    # 5️⃣ +rep
+    await interaction.channel.send(f"+rep {user.id} Legit Exchange {ex_type} ${amount:,.2f}")
 
-    # 6️⃣ Sixth message: Feedback request in #feedback channel
-    feedback_channel_id = 1371445182658252900
-    await interaction.channel.send(
-        f"📝 Kindly give feedback for our exchanger {interaction.user.mention} in <#{feedback_channel_id}>"
-    )
-
+    # 6️⃣ Feedback
+    await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {interaction.user.mention} in <#1371445182658252900>")
 
 # ---------- /profile ----------
 @tree.command(name="profile", description="View a user's exchange profile")
@@ -350,8 +339,8 @@ async def adjust_total(interaction: discord.Interaction, user: discord.Member, a
     old_total = exchanges[uid]["total_amount"]
     new_total = old_total + amount
     if new_total < 0:
-        new_total = 0.0  # prevent negative total
-        amount = -old_total  # show the actual adjustment
+        new_total = 0.0
+        amount = -old_total
 
     exchanges[uid]["total_amount"] = new_total
     save_json(EXCHANGE_FILE, exchanges)
@@ -369,8 +358,6 @@ async def adjust_total(interaction: discord.Interaction, user: discord.Member, a
     embed.set_footer(text=f"Adjusted by {interaction.user.display_name} at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     
     await interaction.response.send_message(embed=embed)
-
-
 
 # ---------- /help ----------
 @tree.command(name="help", description="List all commands")
@@ -392,15 +379,18 @@ async def help_cmd(interaction: discord.Interaction):
         ("/receiving-method", "View your saved crypto/UPI"),
         ("/done", "Record a completed exchange"),
         ("/profile", "View a user's exchange profile"),
-        ("/help", "Show this help message")
+        ("/adjust-total", "Adjust a user's total exchanged amount"),
+        ("/help", "Show this help message"),
+        ("/commands", "Show all commands (same as /help)")
     ]
     for c,d in cmds:
         embed.add_field(name=c, value=d, inline=False)
     await interaction.response.send_message(embed=embed)
 
+@tree.command(name="commands", description="Show all commands (same as /help)")
+async def commands_cmd(interaction: discord.Interaction):
+    await help_cmd(interaction)
+
 # ---------- Run Bot ----------
 TOKEN = os.environ.get("TOKEN")
-if not TOKEN:
-    print("❌ TOKEN not found!")
-else:
-    bot.run(TOKEN)
+bot.run(TOKEN)
