@@ -261,54 +261,60 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     )
     await interaction.response.send_message(embed=embed)
 
-# ---------- /done (enhanced with multiple follow-up messages) ----------
-@tree.command(name="done", description="Record a completed exchange")
-@app_commands.describe(
-    user="Mention the user who did the exchange",
-    amount="Amount in USD",
-    ex_type="Exchange type: i2c or c2i"
-)
-async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
-    ex_type = ex_type.lower()
-    if ex_type not in ["i2c", "c2i"]:
-        await interaction.response.send_message("❌ Exchange type must be either `i2c` or `c2i`!", ephemeral=True)
-        return
+class DoneExchangeModal(discord.ui.Modal):
+    def __init__(self):
+        super().__init__(title="Record Exchange")
+        self.add_item(TextInput(label="User ID or mention", placeholder="Enter user ID or mention", required=True))
+        self.add_item(TextInput(label="Amount (USD)", placeholder="Enter USD amount", required=True))
+        self.add_item(TextInput(label="Exchange Type", placeholder="i2c or c2i", required=True))
 
-    uid = str(user.id)
-    if uid not in exchanges:
-        exchanges[uid] = {"total_amount": 0.0, "deals": 0}
+    async def on_submit(self, interaction: discord.Interaction):
+        try:
+            user_input = self.children[0].value.strip()
+            amount = float(self.children[1].value.strip())
+            ex_type = self.children[2].value.strip().lower()
+            if ex_type not in ["i2c", "c2i"]:
+                await interaction.response.send_message("❌ Exchange type must be i2c or c2i.", ephemeral=True)
+                return
 
-    exchanges[uid]["total_amount"] += amount
-    exchanges[uid]["deals"] += 1
-    save_json(EXCHANGE_FILE, exchanges)
+            # Resolve member
+            user_id = int(user_input.strip("<@!>")) if user_input.startswith("<@") else int(user_input)
+            member_obj = interaction.guild.get_member(user_id)
 
-    # 1️⃣ First message: Confirmation
-    embed = discord.Embed(
-        title="✅ Exchange Recorded",
-        color=pick_color(amount),
-        timestamp=datetime.now(tz=IST)
-    )
-    embed.add_field(name="User", value=user.mention)
-    embed.add_field(name="Amount", value=f"${amount:,.2f}")
-    embed.add_field(name="Type", value=ex_type.upper())
-    embed.add_field(name="Total Deals", value=str(exchanges[uid]["deals"]))
-    embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-    await interaction.response.send_message(embed=embed)
+            # Update exchanges
+            uid = str(user_id)
+            if uid not in exchanges:
+                exchanges[uid] = {"total_amount": 0.0, "deals": 0}
+            exchanges[uid]["total_amount"] += amount
+            exchanges[uid]["deals"] += 1
+            save_json(EXCHANGE_FILE, exchanges)
 
-    # 2️⃣ Second message: Thank you
-    await interaction.channel.send("🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
+            # All-in-one embed
+            embed = discord.Embed(
+                title="✅ Exchange Recorded",
+                color=discord.Color.green(),
+                timestamp=datetime.now(tz=IST)
+            )
+            embed.set_thumbnail(url=member_obj.avatar.url if member_obj and member_obj.avatar else None)
+            embed.add_field(name="Exchanger", value=interaction.user.mention, inline=True)
+            embed.add_field(name="User Exchanged", value=member_obj.mention if member_obj else user_id, inline=True)
+            embed.add_field(name="Amount (USD)", value=f"${amount:,.2f}", inline=True)
+            embed.add_field(name="Exchange Type", value=ex_type.upper(), inline=True)
+            embed.add_field(name="Total Deals for User", value=str(exchanges[uid]["deals"]), inline=True)
+            embed.add_field(name="Total Exchanged for User", value=f"${exchanges[uid]['total_amount']:,.2f}", inline=True)
+            embed.add_field(name="Thank You", value="Thank you for choosing GameClub exchanges! Hope you like our service.", inline=False)
+            embed.add_field(name="Vouch", value=f"+rep {interaction.user.id} Legit Exchange {ex_type.upper()} ${amount:,.2f}", inline=False)
+            embed.add_field(name="Discord Invite", value="https://discord.gg/tuQeqYy4", inline=False)
+            embed.add_field(name="Feedback", value=f"Kindly give feedback for our exchanger {interaction.user.mention}", inline=False)
 
-    # 3️⃣ Third message: Vouch warning
-    await interaction.channel.send("📌 Copy Paste this vouch in this server only or get blacklisted!")
+            await interaction.response.send_message(embed=embed)
+        except Exception as e:
+            await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-    # 4️⃣ Fourth message: Invite link
-    await interaction.channel.send("https://discord.gg/tuQeqYy4")
+@tree.command(name="done", description="Record a completed exchange (all-in-one embed)")
+async def done(interaction: discord.Interaction):
+    await interaction.response.send_modal(DoneExchangeModal())
 
-    # 5️⃣ Fifth message: +rep
-    await interaction.channel.send(f"+rep {user.id} Legit Exchange {ex_type.upper()} ${amount:,.2f}")
-
-    # 6️⃣ Sixth message: Feedback request
-    await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {interaction.user.mention}")
 
 # ---------- /profile ----------
 @tree.command(name="profile", description="View a user's exchange profile")
