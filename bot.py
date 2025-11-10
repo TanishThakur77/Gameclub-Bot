@@ -261,7 +261,7 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     )
     await interaction.response.send_message(embed=embed)
 
-# ---------- /done (fixed) ----------
+# ---------- /done (enhanced with multiple follow-up messages) ----------
 @tree.command(name="done", description="Record a completed exchange")
 @app_commands.describe(
     user="Mention the user who did the exchange",
@@ -282,6 +282,7 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     exchanges[uid]["deals"] += 1
     save_json(EXCHANGE_FILE, exchanges)
 
+    # 1️⃣ First message: Confirmation
     embed = discord.Embed(
         title="✅ Exchange Recorded",
         color=pick_color(amount),
@@ -293,6 +294,21 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     embed.add_field(name="Total Deals", value=str(exchanges[uid]["deals"]))
     embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
+
+    # 2️⃣ Second message: Thank you
+    await interaction.channel.send("🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
+
+    # 3️⃣ Third message: Vouch warning
+    await interaction.channel.send("📌 Copy Paste this vouch in this server only or get blacklisted!")
+
+    # 4️⃣ Fourth message: Invite link
+    await interaction.channel.send("https://discord.gg/tuQeqYy4")
+
+    # 5️⃣ Fifth message: +rep
+    await interaction.channel.send(f"+rep {user.id} Legit Exchange {ex_type.upper()} ${amount:,.2f}")
+
+    # 6️⃣ Sixth message: Feedback request
+    await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {interaction.user.mention}")
 
 # ---------- /profile ----------
 @tree.command(name="profile", description="View a user's exchange profile")
