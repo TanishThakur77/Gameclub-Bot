@@ -2,7 +2,7 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import Modal, TextInput, Select
+from discord.ui import View, Select, TextInput, Button
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
@@ -10,8 +10,8 @@ import json
 
 # ---------- CONFIG ----------
 IST = timezone(timedelta(hours=5, minutes=30))
-EXCHANGE_FILE = "exchanges.json"
 DATA_FILE = "user_slots.json"
+EXCHANGE_FILE = "exchanges.json"
 
 I2C_RATE = 95.0
 C2I_RATE_LOW = 91.0
@@ -64,9 +64,10 @@ def pick_color(amount):
     return discord.Color.gold()
 
 def get_user_slot(user_id):
-    if str(user_id) not in user_slots:
-        user_slots[str(user_id)] = {"crypto": {}, "upi": {}}
-    return user_slots[str(user_id)]
+    uid = str(user_id)
+    if uid not in user_slots:
+        user_slots[uid] = {"crypto": {}, "upi": {}}
+    return user_slots[uid]
 
 # ---------- On Ready ----------
 @bot.event
@@ -160,10 +161,10 @@ class AddSlotModal(discord.ui.Modal):
         self.slot_type = slot_type
         self.slot_num = slot_num
         if slot_type == "crypto":
-            self.add_item(discord.ui.TextInput(label="Address", placeholder="Enter your crypto address", required=True))
-            self.add_item(discord.ui.TextInput(label="Type", placeholder="e.g., USDT POLY, LTC", required=True))
+            self.add_item(TextInput(label="Address", placeholder="Enter your crypto address", required=True))
+            self.add_item(TextInput(label="Type", placeholder="e.g., USDT POLY, LTC", required=True))
         else:
-            self.add_item(discord.ui.TextInput(label="UPI ID", placeholder="Enter your UPI ID", required=True))
+            self.add_item(TextInput(label="UPI ID", placeholder="Enter your UPI ID", required=True))
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
@@ -259,61 +260,62 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     )
     await interaction.response.send_message(embed=embed)
 
-# ---------- /done command with dropdown ----------
-class DoneDropdown(discord.ui.Select):
+# ---------- /done - fully interactive in chat ----------
+class DoneExchangeView(View):
     def __init__(self, guild):
-        options = [discord.SelectOption(label=member.display_name, value=str(member.id)) for member in guild.members if not member.bot]
-        super().__init__(placeholder="Select user", min_values=1, max_values=1, options=options)
+        super().__init__(timeout=None)
         self.guild = guild
+        self.user_select = Select(
+            placeholder="Select user",
+            min_values=1,
+            max_values=1,
+            options=[discord.SelectOption(label=m.display_name, value=str(m.id)) for m in guild.members if not m.bot]
+        )
+        self.user_select.callback = self.user_callback
+        self.add_item(self.user_select)
+        self.amount_input = TextInput(label="Amount (USD)", placeholder="Enter USD amount", required=True, style=discord.TextStyle.short)
+        self.type_input = TextInput(label="Exchange Type", placeholder="i2c or c2i", required=True, style=discord.TextStyle.short)
 
-    async def callback(self, interaction: discord.Interaction):
-        selected_user_id = self.values[0]
-        await interaction.response.send_modal(DoneModal(self.guild, selected_user_id))
+    async def user_callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(DoneExchangeModal(self.user_select.values[0]))
 
-class DoneModal(Modal):
-    def __init__(self, guild, user_id):
+class DoneExchangeModal(Modal):
+    def __init__(self, user_id):
         super().__init__(title="Record Exchange")
-        self.guild = guild
         self.user_id = user_id
-        self.add_item(TextInput(label="Amount (USD)", placeholder="Enter amount in $", required=True))
-        self.add_item(TextInput(label="Exchange Type (i2c/c2i)", placeholder="i2c or c2i", required=True))
+        self.add_item(TextInput(label="Amount (USD)", placeholder="Enter USD amount", required=True))
+        self.add_item(TextInput(label="Exchange Type", placeholder="i2c or c2i", required=True))
 
     async def on_submit(self, interaction: discord.Interaction):
         try:
             amount = float(self.children[0].value)
             ex_type = self.children[1].value.lower()
             if ex_type not in ["i2c", "c2i"]:
-                await interaction.response.send_message("❌ Exchange type must be i2c or c2i.", ephemeral=True)
+                await interaction.response.send_message("❌ Type must be i2c or c2i.", ephemeral=True)
                 return
             if self.user_id not in exchanges:
                 exchanges[self.user_id] = {"total_amount": 0.0, "deals": 0}
             exchanges[self.user_id]["total_amount"] += amount
             exchanges[self.user_id]["deals"] += 1
             save_json(EXCHANGE_FILE, exchanges)
-            user_obj = self.guild.get_member(int(self.user_id))
+            member_obj = interaction.guild.get_member(int(self.user_id))
             embed = discord.Embed(
-                title="✅ Exchange Recorded!",
+                title="✅ Exchange Recorded",
                 color=pick_color(amount),
                 timestamp=datetime.now(tz=IST)
             )
-            embed.add_field(name="User", value=user_obj.mention if user_obj else self.user_id, inline=True)
-            embed.add_field(name="Amount", value=f"${amount:,.2f}", inline=True)
-            embed.add_field(name="Type", value=ex_type.upper(), inline=True)
-            embed.add_field(name="Total Deals", value=str(exchanges[self.user_id]["deals"]), inline=True)
+            embed.add_field(name="User", value=member_obj.mention if member_obj else self.user_id)
+            embed.add_field(name="Amount", value=f"${amount:,.2f}")
+            embed.add_field(name="Type", value=ex_type.upper())
+            embed.add_field(name="Total Deals", value=str(exchanges[self.user_id]["deals"]))
             embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
             await interaction.response.send_message(embed=embed)
         except Exception as e:
             await interaction.response.send_message(f"❌ Error: {e}", ephemeral=True)
 
-class DoneView(discord.ui.View):
-    def __init__(self, guild):
-        super().__init__()
-        self.add_item(DoneDropdown(guild))
-
 @tree.command(name="done", description="Record a completed exchange")
 async def done(interaction: discord.Interaction):
-    view = DoneView(interaction.guild)
-    await interaction.response.send_message("Select the user for this exchange:", view=view, ephemeral=True)
+    await interaction.response.send_modal(DoneExchangeModal("0"))  # placeholder, will fill via modal
 
 # ---------- /profile ----------
 @tree.command(name="profile", description="View a user's exchange profile")
@@ -336,15 +338,15 @@ async def profile(interaction: discord.Interaction, user: discord.Member):
     await interaction.response.send_message(embed=embed)
 
 # ---------- /help ----------
-@tree.command(name="help", description="List all commands and their description")
+@tree.command(name="help", description="List all commands")
 async def help_cmd(interaction: discord.Interaction):
     embed = discord.Embed(
         title="📜 GameClub Bot Commands",
-        description="Here is a list of all available commands with description:",
+        description="These are the available commands:",
         color=discord.Color.gold(),
         timestamp=datetime.now(tz=IST)
     )
-    commands_list = [
+    cmds = [
         ("/ping", "Check if bot is alive"),
         ("/i2c", "Convert INR → USD"),
         ("/c2i", "Convert USD → INR"),
@@ -355,9 +357,10 @@ async def help_cmd(interaction: discord.Interaction):
         ("/receiving-method", "View your saved crypto/UPI"),
         ("/done", "Record a completed exchange"),
         ("/profile", "View a user's exchange profile"),
+        ("/help", "Show this help message")
     ]
-    for cmd, desc in commands_list:
-        embed.add_field(name=cmd, value=desc, inline=False)
+    for c,d in cmds:
+        embed.add_field(name=c, value=d, inline=False)
     await interaction.response.send_message(embed=embed)
 
 # ---------- Run Bot ----------
