@@ -261,19 +261,14 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     )
     await interaction.response.send_message(embed=embed)
     
-# ---------- /done (enhanced with multiple follow-up messages) ----------
+# ---------- /done (free-text exchange type) ----------
 @tree.command(name="done", description="Record a completed exchange")
 @app_commands.describe(
     user="Mention the user who did the exchange",
     amount="Amount in USD",
-    ex_type="Exchange type: i2c or c2i"
+    ex_type="Exchange type (write manually)"
 )
 async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
-    ex_type = ex_type.lower()
-    if ex_type not in ["i2c", "c2i"]:
-        await interaction.response.send_message("❌ Exchange type must be either `i2c` or `c2i`!", ephemeral=True)
-        return
-
     uid = str(user.id)
     if uid not in exchanges:
         exchanges[uid] = {"total_amount": 0.0, "deals": 0}
@@ -290,7 +285,7 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     )
     embed.add_field(name="User", value=user.mention)
     embed.add_field(name="Amount", value=f"${amount:,.2f}")
-    embed.add_field(name="Type", value=ex_type.upper())
+    embed.add_field(name="Type", value=ex_type)
     embed.add_field(name="Total Deals", value=str(exchanges[uid]["deals"]))
     embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
@@ -305,10 +300,11 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     await interaction.channel.send("https://discord.gg/tuQeqYy4")
 
     # 5️⃣ Fifth message: +rep
-    await interaction.channel.send(f"+rep {user.id} Legit Exchange {ex_type.upper()} ${amount:,.2f}")
+    await interaction.channel.send(f"+rep {user.id} Legit Exchange {ex_type} ${amount:,.2f}")
 
     # 6️⃣ Sixth message: Feedback request
     await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {interaction.user.mention}")
+
 
 
 # ---------- /profile ----------
