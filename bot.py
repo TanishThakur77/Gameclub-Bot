@@ -7,6 +7,8 @@ from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
 import json
+import qrcode
+from io import BytesIO
 
 # ---------- CONFIG ----------
 IST = timezone(timedelta(hours=5, minutes=30))
@@ -154,7 +156,7 @@ async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choi
     embed.set_footer(text=f"Updated by {interaction.user.display_name}")
     await interaction.response.send_message(embed=embed)
 
-# ---------- Add / Update Slots ----------
+# ---------- Slot Modals ----------
 class AddSlotModal(discord.ui.Modal):
     def __init__(self, slot_type: str, slot_num: int):
         super().__init__(title=f"{slot_type.capitalize()} Slot {slot_num}")
@@ -227,7 +229,7 @@ async def manage_slot(interaction: discord.Interaction, action: app_commands.Cho
     else:
         await interaction.response.send_modal(AddSlotModal(slot_type.value, slot_num))
 
-# ---------- /receiving-method ----------
+# ---------- /receiving-method (with UPI QR) ----------
 @tree.command(name="receiving-method", description="Select crypto or UPI slot to pay")
 @app_commands.describe(slot_type="Type", slot_num="Slot number 1-5")
 @app_commands.choices(slot_type=[
@@ -248,19 +250,22 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
     if not value:
         await interaction.response.send_message("❌ This slot is empty.", ephemeral=True)
         return
-    if slot_type.value == "crypto":
-        desc = f"💰 **{value['address']}**\nType: **{value['type']}**"
-    else:
-        desc = f"💰 **{value['upi']}**"
-    embed = discord.Embed(
-        title="📌 Payment Info",
-        description=desc,
-        color=discord.Color.blue(),
-        timestamp=datetime.now(tz=IST)
-    )
-    await interaction.response.send_message(embed=embed)
 
-# ---------- /done (all-in-one) ----------
+    if slot_type.value == "crypto":
+        await interaction.channel.send(f"💰 {value['address']}\nType: {value['type']}")
+    else:
+        upi_id = value['upi']
+        qr = qrcode.QRCode(version=1, box_size=10, border=4)
+        qr.add_data(f"upi://pay?pa={upi_id}&pn=RecipientName&cu=INR")
+        qr.make(fit=True)
+        img = qr.make_image(fill="black", back_color="white")
+        buf = BytesIO()
+        img.save(buf, format='PNG')
+        buf.seek(0)
+        await interaction.channel.send(f"💰 {upi_id}")
+        await interaction.channel.send(file=discord.File(fp=buf, filename="upi_qr.png"))
+
+# ---------- /done ----------
 @tree.command(name="done", description="Record a completed exchange")
 @app_commands.describe(
     user="Mention the user who did the exchange",
@@ -288,8 +293,8 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
 
-    # 2️⃣ Thank you
-    await interaction.channel.send("🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
+    # 2️⃣ Thank you (ping the client)
+    await interaction.channel.send(f"🙏 {user.mention} Thank you for choosing Gameclub exchanges! Hope you liked our service.")
 
     # 3️⃣ Vouch warning
     await interaction.channel.send("📌 Copy Paste this vouch in this server only or get blacklisted!")
@@ -303,7 +308,6 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     # 6️⃣ Feedback
     feedback_channel_mention = "<#1371445182658252900>"
     await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {interaction.user.mention} in {feedback_channel_mention}")
-
 
 # ---------- /adjust-total ----------
 @tree.command(name="adjust-total", description="Adjust total exchanged amount for a user")
