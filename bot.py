@@ -2,7 +2,7 @@ import os
 import discord
 from discord import app_commands
 from discord.ext import commands
-from discord.ui import TextInput, Modal
+from discord.ui import Modal, TextInput
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
@@ -154,7 +154,7 @@ async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choi
     embed.set_footer(text=f"Updated by {interaction.user.display_name}")
     await interaction.response.send_message(embed=embed)
 
-# ---------- Add / Update Slots ----------
+# ---------- AddSlotModal ----------
 class AddSlotModal(discord.ui.Modal):
     def __init__(self, slot_type: str, slot_num: int):
         super().__init__(title=f"{slot_type.capitalize()} Slot {slot_num}")
@@ -165,12 +165,18 @@ class AddSlotModal(discord.ui.Modal):
             self.add_item(TextInput(label="Type", placeholder="e.g., USDT POLY, LTC", required=True))
         else:
             self.add_item(TextInput(label="UPI ID", placeholder="Enter your UPI ID", required=True))
+            self.add_item(TextInput(label="QR Image URL (optional)", placeholder="Paste QR image URL if no attachment", required=False))
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
         if uid not in user_slots:
             user_slots[uid] = {"crypto": {}, "upi": {}}
         slots = user_slots[uid][self.slot_type]
+
+        qr_url = None
+        if len(self.children) > 1 and self.children[1].value:
+            qr_url = self.children[1].value
+
         if self.slot_type == "crypto":
             slots[str(self.slot_num)] = {
                 "address": self.children[0].value,
@@ -178,13 +184,16 @@ class AddSlotModal(discord.ui.Modal):
             }
             msg = f"✅ {self.slot_type.capitalize()} Slot {self.slot_num} Updated."
         else:
-            slots[str(self.slot_num)] = {"upi": self.children[0].value}
-            msg = f"✅ {self.slot_type.upper()} Slot {self.slot_num} Updated."
+            slots[str(self.slot_num)] = {
+                "upi": self.children[0].value,
+                "qr": qr_url
+            }
+            msg = f"✅ UPI Slot {self.slot_num} Updated."
         save_json(DATA_FILE, user_slots)
         await interaction.response.send_message(msg, ephemeral=True)
 
 # ---------- /add-addy ----------
-@tree.command(name="add-addy", description="Add/replace crypto slot")
+@tree.command(name="add-addy", description="Add or replace crypto slot")
 @app_commands.describe(slot_num="Slot number 1-5")
 async def add_addy(interaction: discord.Interaction, slot_num: int):
     if slot_num < 1 or slot_num > 5:
@@ -193,7 +202,7 @@ async def add_addy(interaction: discord.Interaction, slot_num: int):
     await interaction.response.send_modal(AddSlotModal("crypto", slot_num))
 
 # ---------- /add-upi ----------
-@tree.command(name="add-upi", description="Add/replace UPI slot")
+@tree.command(name="add-upi", description="Add or replace UPI slot (with optional QR)")
 @app_commands.describe(slot_num="Slot number 1-5")
 async def add_upi(interaction: discord.Interaction, slot_num: int):
     if slot_num < 1 or slot_num > 5:
@@ -250,11 +259,17 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
         return
 
     if slot_type.value == "crypto":
-        # send separate messages
-        await interaction.response.send_message(f"💰 {value['address']}")
-        await interaction.channel.send(f"Type: **{value['type']}**")
+        desc = f"💰 **{value['address']}**\nType: **{value['type']}**"
+        embed = discord.Embed(title="📌 Payment Info (Crypto)", description=desc, color=discord.Color.blue(), timestamp=datetime.now(tz=IST))
+        await interaction.response.send_message(embed=embed)
+        await interaction.channel.send(f"{value['address']}")
     else:
-        await interaction.response.send_message(f"💰 {value['upi']}")
+        desc = f"💰 **{value['upi']}**"
+        embed = discord.Embed(title="📌 Payment Info (UPI)", description=desc, color=discord.Color.green(), timestamp=datetime.now(tz=IST))
+        await interaction.response.send_message(embed=embed)
+        await interaction.channel.send(f"{value['upi']}")
+        if "qr" in value and value["qr"]:
+            await interaction.channel.send(value["qr"])
 
 # ---------- /done ----------
 @tree.command(name="done", description="Record a completed exchange")
@@ -271,7 +286,6 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     exchanges[uid]["deals"] += 1
     save_json(EXCHANGE_FILE, exchanges)
 
-    # 1️⃣ Confirmation
     embed = discord.Embed(
         title="✅ Exchange Recorded",
         color=pick_color(amount),
@@ -284,21 +298,12 @@ async def done(interaction: discord.Interaction, user: discord.Member, amount: f
     embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
     await interaction.response.send_message(embed=embed)
 
-    # 2️⃣ Thank you (ping user)
-    await interaction.channel.send(f"🙏 {user.mention}, thank you for choosing Gameclub exchanges! Hope you liked our service.")
-
-    # 3️⃣ Vouch warning
+    await interaction.channel.send(f"{user.mention} 🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
     await interaction.channel.send("📌 Copy Paste this vouch in this server only or get blacklisted!")
-
-    # 4️⃣ Invite link
     await interaction.channel.send("https://discord.gg/tuQeqYy4")
-
-    # 5️⃣ +rep
     await interaction.channel.send(f"+rep {user.id} Legit Exchange {ex_type} ${amount:,.2f}")
-
-    # 6️⃣ Feedback
     feedback_channel_mention = "<#1371445182658252900>"
-    await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {interaction.user.mention} in {feedback_channel_mention}")
+    await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {user.mention} in {feedback_channel_mention}")
 
 # ---------- /adjust-total ----------
 @tree.command(name="adjust-total", description="Adjust total exchanged amount for a user")
@@ -352,7 +357,8 @@ async def help_cmd(interaction: discord.Interaction):
         ("/done", "Record a completed exchange"),
         ("/adjust-total", "Adjust total exchanged amount for a user"),
         ("/profile", "View a user's exchange profile"),
-        ("/help", "Show this help message")
+        ("/help", "Show this help message"),
+        ("/commands", "Alias for /help")
     ]
     for c,d in cmds:
         embed.add_field(name=c, value=d, inline=False)
@@ -365,7 +371,7 @@ async def commands_cmd(interaction: discord.Interaction):
 
 # ---------- Run Bot ----------
 TOKEN = os.environ.get("TOKEN")
-if not TOKEN:
-    print("❌ TOKEN not found!")
-else:
+if TOKEN:
     bot.run(TOKEN)
+else:
+    print("❌ TOKEN not found!")
