@@ -272,38 +272,76 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
             await interaction.channel.send(value["qr"])
 
 # ---------- /done ----------
-@tree.command(name="done", description="Record a completed exchange")
+class ConfirmDone(discord.ui.View):
+    def __init__(self, user, amount, ex_type, exchanger):
+        super().__init__(timeout=60)
+        self.user = user            # client
+        self.amount = amount
+        self.ex_type = ex_type
+        self.exchanger = exchanger  # person who used the command
+
+    @discord.ui.button(label="OKAY", style=discord.ButtonStyle.green)
+    async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.exchanger:
+            return await interaction.response.send_message("❌ Only the exchanger can confirm this.", ephemeral=True)
+
+        uid = str(self.user.id)
+        if uid not in exchanges:
+            exchanges[uid] = {"total_amount": 0.0, "deals": 0}
+
+        exchanges[uid]["total_amount"] += self.amount
+        exchanges[uid]["deals"] += 1
+        save_json(EXCHANGE_FILE, exchanges)
+
+        embed = discord.Embed(
+            title="✅ Exchange Recorded",
+            color=pick_color(self.amount),
+            timestamp=datetime.now(tz=IST)
+        )
+        embed.add_field(name="Client", value=self.user.mention)
+        embed.add_field(name="Amount", value=f"${self.amount:,.2f}")
+        embed.add_field(name="Type", value=self.ex_type)
+        embed.add_field(name="Total Deals", value=str(exchanges[uid]["deals"]))
+        embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
+
+        await interaction.response.edit_message(content="✅ Exchange Confirmed!", view=None, embed=embed)
+
+        # Correct: only ping the CLIENT here
+        await interaction.channel.send(f"{self.user.mention} 🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
+
+        # Correct: vouch uses EXCHANGER's ID
+        await interaction.channel.send("📌 Copy Paste this vouch in this server only or get blacklisted!")
+        await interaction.channel.send("https://discord.gg/tuQeqYy4")
+        await interaction.channel.send(f"+rep {self.exchanger.id} Legit Exchange {self.ex_type} ${self.amount:,.2f}")
+
+        # Correct: feedback asks about the EXCHANGER, not the client
+        feedback_channel_mention = "<#1371445182658252900>"
+        await interaction.channel.send(
+            f"📝 Kindly give feedback for our exchanger {self.exchanger.mention} in {feedback_channel_mention}"
+        )
+
+    @discord.ui.button(label="CANCEL", style=discord.ButtonStyle.red)
+    async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        if interaction.user != self.exchanger:
+            return await interaction.response.send_message("❌ Only the exchanger can cancel this.", ephemeral=True)
+
+        await interaction.response.edit_message(content="❌ Exchange cancelled.", view=None)
+
+@tree.command(name="done", description="Record a completed exchange with confirmation")
 @app_commands.describe(
-    user="Mention the user who did the exchange",
+    user="Mention the client",
     amount="Amount in USD",
-    ex_type="Exchange type (fill manually, e.g., USDT → UPI)"
+    ex_type="Exchange type (e.g., USDT → UPI)"
 )
 async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
-    uid = str(user.id)
-    if uid not in exchanges:
-        exchanges[uid] = {"total_amount": 0.0, "deals": 0}
-    exchanges[uid]["total_amount"] += amount
-    exchanges[uid]["deals"] += 1
-    save_json(EXCHANGE_FILE, exchanges)
 
-    embed = discord.Embed(
-        title="✅ Exchange Recorded",
-        color=pick_color(amount),
-        timestamp=datetime.now(tz=IST)
+    view = ConfirmDone(user, amount, ex_type, interaction.user)
+
+    await interaction.response.send_message(
+        "⚠️ **Are you sure you want to confirm this exchange?**\nPress **OKAY** to finalize.",
+        view=view,
+        ephemeral=True
     )
-    embed.add_field(name="User", value=user.mention)
-    embed.add_field(name="Amount", value=f"${amount:,.2f}")
-    embed.add_field(name="Type", value=ex_type)
-    embed.add_field(name="Total Deals", value=str(exchanges[uid]["deals"]))
-    embed.set_footer(text=f"Recorded at {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-    await interaction.response.send_message(embed=embed)
-
-    await interaction.channel.send(f"{user.mention} 🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
-    await interaction.channel.send("📌 Copy Paste this vouch in this server only or get blacklisted!")
-    await interaction.channel.send("https://discord.gg/tuQeqYy4")
-    await interaction.channel.send(f"+rep {user.id} Legit Exchange {ex_type} ${amount:,.2f}")
-    feedback_channel_mention = "<#1371445182658252900>"
-    await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {user.mention} in {feedback_channel_mention}")
 
 # ---------- /adjust-total ----------
 @tree.command(name="adjust-total", description="Adjust total exchanged amount for a user")
