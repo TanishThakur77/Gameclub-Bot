@@ -350,7 +350,7 @@ class ConfirmDone(discord.ui.View):
             )
             await interaction.channel.send("https://discord.gg/tuQeqYy4")
             await interaction.channel.send(
-                f"+rep {self.exchanger.id} Legit Exchange {self.ex_type} ${self.amount:,.2f}"
+                f"+rep {self.exchanger.id} Legit Exchange • {self.ex_type} [${self.amount:,.2f}]"
             )
 
             # Feedback ping: mention exchanger (not client)
