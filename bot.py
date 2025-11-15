@@ -273,79 +273,160 @@ async def receiving_method(interaction: discord.Interaction, slot_type: app_comm
 
 # ---------- /done ----------
 class ConfirmDone(discord.ui.View):
-    def __init__(self, user, amount, ex_type, exchanger):
-        super().__init__(timeout=30)
-        self.user = user
+    def __init__(self, user: discord.Member, amount: float, ex_type: str, exchanger: discord.Member, timeout: int = 30):
+        super().__init__(timeout=timeout)
+        self.user = user            # client (Member)
         self.amount = amount
         self.ex_type = ex_type
-        self.exchanger = exchanger
+        self.exchanger = exchanger  # person who used the command (Member)
+
+    def disable_all(self):
+        for child in self.children:
+            try:
+                child.disabled = True
+            except Exception:
+                pass
+
+    async def on_timeout(self):
+        # disable buttons when view times out
+        try:
+            self.disable_all()
+            # try editing the original ephemeral message to show it's timed out (best-effort)
+            if hasattr(self, "message") and self.message:
+                await self.message.edit(content="⌛ Confirmation timed out.", view=self)
+        except Exception:
+            pass
+        finally:
+            self.stop()
 
     @discord.ui.button(label="OKAY", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only the exchanger may confirm
         if interaction.user.id != self.exchanger.id:
-            return await interaction.response.send_message("❌ Only the exchanger can confirm.", ephemeral=True)
+            return await interaction.response.send_message("❌ Only the exchanger can confirm this.", ephemeral=True)
 
-        uid = str(self.user.id)
-        if uid not in exchanges:
-            exchanges[uid] = {"total_amount": 0.0, "deals": 0}
+        # Prevent double processing if button gets pressed twice quickly
+        self.disable_all()
+        try:
+            await interaction.response.defer()  # acknowledge the component interaction
 
-        exchanges[uid]["total_amount"] += self.amount
-        exchanges[uid]["deals"] += 1
-        save_json(EXCHANGE_FILE, exchanges)
+            # Record exchange (use client's id as string)
+            uid = str(self.user.id)
+            if uid not in exchanges:
+                exchanges[uid] = {"total_amount": 0.0, "deals": 0}
+            exchanges[uid]["total_amount"] += float(self.amount)
+            exchanges[uid]["deals"] += 1
+            save_json(EXCHANGE_FILE, exchanges)
 
-        # PUBLIC message now
-        embed = discord.Embed(
-            title="✅ Exchange Recorded",
-            color=pick_color(self.amount),
-            timestamp=datetime.now(tz=IST)
-        )
-        embed.add_field(name="Client", value=self.user.mention)
-        embed.add_field(name="Amount", value=f"${self.amount:,.2f}")
-        embed.add_field(name="Type", value=self.ex_type)
-        embed.add_field(name="Total Deals (Client)", value=str(exchanges[uid]["deals"]))
-        embed.set_footer(text=f"Recorded by {self.exchanger.display_name}")
+            # Public embed (visible to everyone)
+            embed = discord.Embed(
+                title="✅ Exchange Recorded",
+                color=pick_color(self.amount),
+                timestamp=datetime.now(tz=IST)
+            )
+            embed.add_field(name="Client", value=self.user.mention)
+            embed.add_field(name="Amount", value=f"${self.amount:,.2f}")
+            embed.add_field(name="Type", value=self.ex_type)
+            embed.add_field(name="Total Deals (Client)", value=str(exchanges[uid]["deals"]))
+            # safe thumbnail
+            try:
+                if self.user.avatar:
+                    embed.set_thumbnail(url=self.user.avatar.url)
+            except Exception:
+                pass
+            embed.set_footer(text=f"Recorded by {self.exchanger.display_name}")
 
-        await interaction.response.send_message(embed=embed)
+            # Send public embed and messages via followup (public)
+            await interaction.followup.send(embed=embed)
 
-        # Thank you message (public)
-        await interaction.channel.send(
-            f"{self.user.mention} 🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service."
-        )
+            # Public thank you
+            await interaction.channel.send(
+                f"{self.user.mention} 🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service."
+            )
 
-        # Vouch message — now uses EXCHANGER ID
-        await interaction.channel.send(
-            f"+rep {self.exchanger.id} Legit Exchange {self.ex_type} ${self.amount:,.2f}"
-        )
+            # Vouch: use exchanger's ID (the person who ran /done)
+            await interaction.channel.send(
+                "📌 Copy Paste this vouch in this server only or get blacklisted!"
+            )
+            await interaction.channel.send("https://discord.gg/tuQeqYy4")
+            await interaction.channel.send(
+                f"+rep {self.exchanger.id} Legit Exchange {self.ex_type} ${self.amount:,.2f}"
+            )
 
-        # Feedback ping — pings exchanger, not client
-        feedback_channel_mention = "<#1371445182658252900>"
-        await interaction.channel.send(
-            f"📝 Kindly give feedback for our exchanger {self.exchanger.mention} in {feedback_channel_mention}"
-        )
+            # Feedback ping: mention exchanger (not client)
+            feedback_channel_mention = "<#1371445182658252900>"
+            await interaction.channel.send(
+                f"📝 Kindly give feedback for our exchanger {self.exchanger.mention} in {feedback_channel_mention}"
+            )
+
+            # Edit the ephemeral confirmation message seen by exchanger: mark as confirmed and disable buttons
+            try:
+                # interaction.message references the original ephemeral message (best-effort)
+                self.disable_all()
+                if interaction.message:
+                    await interaction.message.edit(content="✅ Exchange Confirmed!", view=self)
+            except Exception:
+                # fallback: try to send an ephemeral confirmation if editing fails
+                try:
+                    await interaction.followup.send("✅ Exchange Confirmed!", ephemeral=True)
+                except Exception:
+                    pass
+
+        except Exception as e:
+            # If anything goes wrong, try to notify the exchanger (ephemeral) and re-enable buttons stopped
+            try:
+                await interaction.followup.send(f"❌ Error recording exchange: {e}", ephemeral=True)
+            except Exception:
+                pass
+        finally:
+            self.stop()
 
     @discord.ui.button(label="CANCEL", style=discord.ButtonStyle.red)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
+        # Only the exchanger may cancel
         if interaction.user.id != self.exchanger.id:
-            return await interaction.response.send_message("❌ Only the exchanger can cancel.", ephemeral=True)
-        await interaction.response.send_message("❌ Exchange cancelled.", ephemeral=True)
-        self.stop()
+            return await interaction.response.send_message("❌ Only the exchanger can cancel this.", ephemeral=True)
+
+        # disable buttons immediately
+        self.disable_all()
+        try:
+            # Edit the ephemeral confirmation message to indicate cancellation (ephemeral)
+            if interaction.response.is_done():
+                # if already responded, use followup
+                await interaction.followup.send("❌ Exchange cancelled.", ephemeral=True)
+            else:
+                await interaction.response.edit_message(content="❌ Exchange cancelled.", view=self)
+        except Exception:
+            try:
+                await interaction.response.send_message("❌ Exchange cancelled.", ephemeral=True)
+            except Exception:
+                pass
+        finally:
+            self.stop()
 
 
 @tree.command(name="done", description="Record a completed exchange")
 @app_commands.describe(
-    user="Mention the user who did the exchange",
+    user="Mention the client",
     amount="Amount in USD",
-    ex_type="Exchange type (fill manually, e.g., USDT → UPI)"
+    ex_type="Exchange type (e.g., USDT → UPI)"
 )
 async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
-    view = ConfirmDone(user, amount, ex_type, interaction.user)
+    view = ConfirmDone(user, amount, ex_type, interaction.user, timeout=30)
 
-    # Confirmation is ephemeral (only exchanger sees it)
+    # send ephemeral confirmation (only visible to exchanger)
+    # store the ephemeral message object on the view so handlers can edit it later
     await interaction.response.send_message(
         "Are you sure you want to confirm this exchange?\nPress **OKAY** to finalize.",
         view=view,
         ephemeral=True
     )
+    try:
+        # attempt to save the ephemeral message object for later edits
+        view.message = await interaction.original_response()
+    except Exception:
+        # not critical if we fail to fetch the ephemeral message object
+        view.message = None
 
 # ---------- /adjust-total ----------
 @tree.command(name="adjust-total", description="Adjust total exchanged amount for a user")
