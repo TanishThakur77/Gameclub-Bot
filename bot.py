@@ -348,7 +348,7 @@ class ConfirmDone(discord.ui.View):
             await interaction.channel.send(
                 "📌 Copy Paste this vouch in this server only or get blacklisted!"
             )
-            await interaction.channel.send("https://discord.gg/tuQeqYy4")
+            await interaction.channel.send("https://discord.gg/ResmDRqhyD")
             await interaction.channel.send(
                 f"+rep {self.exchanger.id} Legit Exchange • {self.ex_type} [${self.amount:,.2f}]"
             )
