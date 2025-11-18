@@ -6,31 +6,18 @@ from discord.ui import Modal, TextInput
 from datetime import datetime, timedelta, timezone
 from flask import Flask
 from threading import Thread
-import json
+import sqlite3
 
 # ---------- CONFIG ----------
 IST = timezone(timedelta(hours=5, minutes=30))
-DATA_FILE = "user_slots.json"
-EXCHANGE_FILE = "exchanges.json"
 
 I2C_RATE = 95.0
 C2I_RATE_LOW = 91.0
 C2I_RATE_HIGH = 91.5
 C2I_THRESHOLD = 100.0
 
-# ---------- Persistent Storage ----------
-def load_json(file_path, default):
-    if not os.path.exists(file_path):
-        return default
-    with open(file_path, "r") as f:
-        return json.load(f)
-
-def save_json(file_path, data):
-    with open(file_path, "w") as f:
-        json.dump(data, f, indent=4)
-
-user_slots = load_json(DATA_FILE, {})
-exchanges = load_json(EXCHANGE_FILE, {})
+EXCHANGER_ROLE_ID = 1373872952990236692  # Exchanger role
+DB_FILE = "bot_data.db"
 
 # ---------- Flask Keep-Alive ----------
 app = Flask("")
@@ -52,7 +39,38 @@ intents.members = True
 bot = commands.Bot(command_prefix="!", intents=intents)
 tree = bot.tree
 
-# ---------- Helpers ----------
+# ---------- DATABASE ----------
+conn = sqlite3.connect(DB_FILE)
+c = conn.cursor()
+
+# Users slots
+c.execute('''CREATE TABLE IF NOT EXISTS user_slots (
+    user_id TEXT,
+    slot_type TEXT,
+    slot_num INTEGER,
+    address TEXT,
+    crypto_type TEXT,
+    qr TEXT,
+    upi TEXT,
+    PRIMARY KEY (user_id, slot_type, slot_num)
+)''')
+
+# Exchanges
+c.execute('''CREATE TABLE IF NOT EXISTS exchanges (
+    user_id TEXT PRIMARY KEY,
+    total_amount REAL DEFAULT 0,
+    deals INTEGER DEFAULT 0
+)''')
+
+# Dot commands
+c.execute('''CREATE TABLE IF NOT EXISTS dot_commands (
+    command_name TEXT PRIMARY KEY,
+    response TEXT
+)''')
+
+conn.commit()
+
+# ---------- HELPERS ----------
 def pretty_num(value):
     return f"{int(value):,}" if float(value).is_integer() else f"{value:,.2f}"
 
@@ -63,13 +81,18 @@ def pick_color(amount):
         return discord.Color.blue()
     return discord.Color.gold()
 
-def get_user_slot(user_id):
-    uid = str(user_id)
-    if uid not in user_slots:
-        user_slots[uid] = {"crypto": {}, "upi": {}}
-    return user_slots[uid]
+def get_user_slot(user_id, slot_type):
+    c.execute("SELECT slot_num, address, crypto_type, qr, upi FROM user_slots WHERE user_id=? AND slot_type=?", (str(user_id), slot_type))
+    return {row[0]: {"address": row[1], "type": row[2], "qr": row[3], "upi": row[4]} for row in c.fetchall()}
 
-# ---------- On Ready ----------
+# ---------- PERMISSIONS ----------
+def is_exchanger(user):
+    return any(role.id == EXCHANGER_ROLE_ID for role in user.roles)
+
+def can_use_admin_commands(user):
+    return user.guild_permissions.administrator or is_exchanger(user)
+
+# ---------- ON READY ----------
 @bot.event
 async def on_ready():
     print(f"✅ Logged in as {bot.user} (ID: {bot.user.id})")
@@ -137,17 +160,17 @@ async def c2i(interaction: discord.Interaction, amount: float):
     app_commands.Choice(name="C2I High (USD ≥ 100)", value="c2i_high")
 ])
 async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choice[str], new_rate: float):
-    global I2C_RATE, C2I_RATE_LOW, C2I_RATE_HIGH
-    if not interaction.user.guild_permissions.administrator:
-        await interaction.response.send_message("🚫 Only admins can change rates.", ephemeral=True)
+    if not can_use_admin_commands(interaction.user):
+        await interaction.response.send_message("🚫 Only admins/exchangers can change rates.", ephemeral=True)
         return
+    global I2C_RATE, C2I_RATE_LOW, C2I_RATE_HIGH
     if rate_type.value == "i2c":
         I2C_RATE = new_rate
         title = "💱 I2C Rate Updated"
     elif rate_type.value == "c2i_low":
         C2I_RATE_LOW = new_rate
         title = "💸 C2I Low Rate Updated"
-    elif rate_type.value == "c2i_high":
+    else:
         C2I_RATE_HIGH = new_rate
         title = "💰 C2I High Rate Updated"
     embed = discord.Embed(title=title, description=f"New rate: **{new_rate}**", color=discord.Color.gold())
@@ -155,7 +178,7 @@ async def setrate(interaction: discord.Interaction, rate_type: app_commands.Choi
     await interaction.response.send_message(embed=embed)
 
 # ---------- AddSlotModal ----------
-class AddSlotModal(discord.ui.Modal):
+class AddSlotModal(Modal):
     def __init__(self, slot_type: str, slot_num: int):
         super().__init__(title=f"{slot_type.capitalize()} Slot {slot_num}")
         self.slot_type = slot_type
@@ -163,34 +186,23 @@ class AddSlotModal(discord.ui.Modal):
         if slot_type == "crypto":
             self.add_item(TextInput(label="Address", placeholder="Enter your crypto address", required=True))
             self.add_item(TextInput(label="Type", placeholder="e.g., USDT POLY, LTC", required=True))
+            self.add_item(TextInput(label="QR URL", placeholder="Paste QR image URL", required=False))
         else:
             self.add_item(TextInput(label="UPI ID", placeholder="Enter your UPI ID", required=True))
-            self.add_item(TextInput(label="QR Image URL (optional)", placeholder="Paste QR image URL if no attachment", required=False))
+            self.add_item(TextInput(label="QR URL (optional)", placeholder="Paste QR image URL", required=False))
 
     async def on_submit(self, interaction: discord.Interaction):
         uid = str(interaction.user.id)
-        if uid not in user_slots:
-            user_slots[uid] = {"crypto": {}, "upi": {}}
-        slots = user_slots[uid][self.slot_type]
+        address = self.children[0].value
+        ctype = self.children[1].value if self.slot_type=="crypto" else None
+        qr = self.children[2].value if len(self.children) > 2 else None
+        upi = self.children[0].value if self.slot_type=="upi" else None
 
-        qr_url = None
-        if len(self.children) > 1 and self.children[1].value:
-            qr_url = self.children[1].value
+        c.execute('''INSERT OR REPLACE INTO user_slots (user_id, slot_type, slot_num, address, crypto_type, qr, upi)
+                     VALUES (?, ?, ?, ?, ?, ?, ?)''', (uid, self.slot_type, self.slot_num, address, ctype, qr, upi))
+        conn.commit()
 
-        if self.slot_type == "crypto":
-            slots[str(self.slot_num)] = {
-                "address": self.children[0].value,
-                "type": self.children[1].value
-            }
-            msg = f"✅ {self.slot_type.capitalize()} Slot {self.slot_num} Updated."
-        else:
-            slots[str(self.slot_num)] = {
-                "upi": self.children[0].value,
-                "qr": qr_url
-            }
-            msg = f"✅ UPI Slot {self.slot_num} Updated."
-        save_json(DATA_FILE, user_slots)
-        await interaction.response.send_message(msg, ephemeral=True)
+        await interaction.response.send_message(f"✅ {self.slot_type.capitalize()} Slot {self.slot_num} Updated.", ephemeral=True)
 
 # ---------- /add-addy ----------
 @tree.command(name="add-addy", description="Add or replace crypto slot")
@@ -202,7 +214,7 @@ async def add_addy(interaction: discord.Interaction, slot_num: int):
     await interaction.response.send_modal(AddSlotModal("crypto", slot_num))
 
 # ---------- /add-upi ----------
-@tree.command(name="add-upi", description="Add or replace UPI slot (with optional QR)")
+@tree.command(name="add-upi", description="Add or replace UPI slot")
 @app_commands.describe(slot_num="Slot number 1-5")
 async def add_upi(interaction: discord.Interaction, slot_num: int):
     if slot_num < 1 or slot_num > 5:
@@ -211,8 +223,6 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
     await interaction.response.send_modal(AddSlotModal("upi", slot_num))
 
 # ---------- /manage-slot ----------
-@tree.command(name="manage-slot", description="Update or delete any slot")
-@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
 @app_commands.choices(action=[
     app_commands.Choice(name="Update", value="update"),
     app_commands.Choice(name="Delete", value="delete")
@@ -221,17 +231,18 @@ async def add_upi(interaction: discord.Interaction, slot_num: int):
     app_commands.Choice(name="Crypto", value="crypto"),
     app_commands.Choice(name="UPI", value="upi")
 ])
+@tree.command(name="manage-slot", description="Update or delete any slot")
+@app_commands.describe(action="Choose action", slot_type="Slot type", slot_num="Slot number 1-5")
 async def manage_slot(interaction: discord.Interaction, action: app_commands.Choice[str], slot_type: app_commands.Choice[str], slot_num: int):
-    uid = str(interaction.user.id)
-    if uid not in user_slots:
-        user_slots[uid] = {"crypto": {}, "upi": {}}
-    slots = user_slots[uid][slot_type.value]
+    if not can_use_admin_commands(interaction.user):
+        await interaction.response.send_message("🚫 You can't do this.", ephemeral=True)
+        return
     if slot_num < 1 or slot_num > 5:
         await interaction.response.send_message("❌ Invalid slot! Choose 1-5.", ephemeral=True)
         return
     if action.value == "delete":
-        slots.pop(str(slot_num), None)
-        save_json(DATA_FILE, user_slots)
+        c.execute("DELETE FROM user_slots WHERE user_id=? AND slot_type=? AND slot_num=?", (str(interaction.user.id), slot_type.value, slot_num))
+        conn.commit()
         await interaction.response.send_message(f"✅ {slot_type.value.capitalize()} Slot {slot_num} deleted.", ephemeral=True)
     else:
         await interaction.response.send_modal(AddSlotModal(slot_type.value, slot_num))
@@ -251,159 +262,96 @@ async def manage_slot(interaction: discord.Interaction, action: app_commands.Cho
     app_commands.Choice(name="5", value=5)
 ])
 async def receiving_method(interaction: discord.Interaction, slot_type: app_commands.Choice[str], slot_num: app_commands.Choice[int]):
-    uid = str(interaction.user.id)
-    slots = get_user_slot(uid)[slot_type.value]
-    value = slots.get(str(slot_num.value))
+    slots = get_user_slot(interaction.user.id, slot_type.value)
+    value = slots.get(slot_num.value)
     if not value:
         await interaction.response.send_message("❌ This slot is empty.", ephemeral=True)
         return
 
+    desc = ""
     if slot_type.value == "crypto":
-        desc = f"💰 **{value['address']}**\nType: **{value['type']}**"
+        desc = f"💰 **{value['address']}**\nType: **{value['type']}**\nQR: {value.get('qr','None')}"
         embed = discord.Embed(title="📌 Payment Info (Crypto)", description=desc, color=discord.Color.blue(), timestamp=datetime.now(tz=IST))
         await interaction.response.send_message(embed=embed)
         await interaction.channel.send(f"{value['address']}")
+        if value.get("qr"):
+            await interaction.channel.send(value["qr"])
     else:
-        desc = f"💰 **{value['upi']}**"
+        desc = f"💰 **{value.get('upi','')}**\nQR: {value.get('qr','None')}"
         embed = discord.Embed(title="📌 Payment Info (UPI)", description=desc, color=discord.Color.green(), timestamp=datetime.now(tz=IST))
         await interaction.response.send_message(embed=embed)
-        await interaction.channel.send(f"{value['upi']}")
-        if "qr" in value and value["qr"]:
+        await interaction.channel.send(f"{value.get('upi','')}")
+        if value.get("qr"):
             await interaction.channel.send(value["qr"])
 
 # ---------- /done ----------
 class ConfirmDone(discord.ui.View):
     def __init__(self, user: discord.Member, amount: float, ex_type: str, exchanger: discord.Member, timeout: int = 30):
         super().__init__(timeout=timeout)
-        self.user = user            # client (Member)
+        self.user = user
         self.amount = amount
         self.ex_type = ex_type
-        self.exchanger = exchanger  # person who used the command (Member)
+        self.exchanger = exchanger
 
     def disable_all(self):
         for child in self.children:
-            try:
-                child.disabled = True
-            except Exception:
-                pass
+            child.disabled = True
 
     async def on_timeout(self):
-        # disable buttons when view times out
-        try:
-            self.disable_all()
-            # try editing the original ephemeral message to show it's timed out (best-effort)
-            if hasattr(self, "message") and self.message:
-                await self.message.edit(content="⌛ Confirmation timed out.", view=self)
-        except Exception:
-            pass
-        finally:
-            self.stop()
+        self.disable_all()
+        if hasattr(self, "message") and self.message:
+            await self.message.edit(content="⌛ Confirmation timed out.", view=self)
+        self.stop()
 
     @discord.ui.button(label="OKAY", style=discord.ButtonStyle.green)
     async def confirm(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Only the exchanger may confirm
         if interaction.user.id != self.exchanger.id:
             return await interaction.response.send_message("❌ Only the exchanger can confirm this.", ephemeral=True)
-
-        # Prevent double processing if button gets pressed twice quickly
         self.disable_all()
+        # Record exchange
+        uid = str(self.user.id)
+        c.execute("INSERT OR IGNORE INTO exchanges (user_id) VALUES (?)", (uid,))
+        c.execute("UPDATE exchanges SET total_amount = total_amount + ?, deals = deals + 1 WHERE user_id=?", (self.amount, uid))
+        conn.commit()
+
+        embed = discord.Embed(
+            title="✅ Exchange Recorded",
+            color=pick_color(self.amount),
+            timestamp=datetime.now(tz=IST)
+        )
+        embed.add_field(name="Client", value=self.user.mention)
+        embed.add_field(name="Amount", value=f"${self.amount:,.2f}")
+        embed.add_field(name="Type", value=self.ex_type)
+        c.execute("SELECT deals FROM exchanges WHERE user_id=?", (uid,))
+        deals = c.fetchone()[0]
+        embed.add_field(name="Total Deals (Client)", value=str(deals))
         try:
-            await interaction.response.defer()  # acknowledge the component interaction
+            if self.user.avatar:
+                embed.set_thumbnail(url=self.user.avatar.url)
+        except: pass
+        embed.set_footer(text=f"Recorded by {self.exchanger.display_name}")
+        await interaction.followup.send(embed=embed)
+        await interaction.channel.send(f"{self.user.mention} 🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service.")
+        await interaction.channel.send(f"📌 Copy Paste this vouch in this server only or get blacklisted!")
+        await interaction.channel.send("https://discord.gg/ResmDRqhyD")
+        await interaction.channel.send(f"+rep {self.exchanger.id} Legit Exchange • {self.ex_type} [${self.amount:,.2f}]")
+        feedback_channel_mention = "<#1371445182658252900>"
+        await interaction.channel.send(f"📝 Kindly give feedback for our exchanger {self.exchanger.mention} in {feedback_channel_mention}")
 
-            # Record exchange (use client's id as string)
-            uid = str(self.user.id)
-            if uid not in exchanges:
-                exchanges[uid] = {"total_amount": 0.0, "deals": 0}
-            exchanges[uid]["total_amount"] += float(self.amount)
-            exchanges[uid]["deals"] += 1
-            save_json(EXCHANGE_FILE, exchanges)
-
-            # Public embed (visible to everyone)
-            embed = discord.Embed(
-                title="✅ Exchange Recorded",
-                color=pick_color(self.amount),
-                timestamp=datetime.now(tz=IST)
-            )
-            embed.add_field(name="Client", value=self.user.mention)
-            embed.add_field(name="Amount", value=f"${self.amount:,.2f}")
-            embed.add_field(name="Type", value=self.ex_type)
-            embed.add_field(name="Total Deals (Client)", value=str(exchanges[uid]["deals"]))
-            # safe thumbnail
-            try:
-                if self.user.avatar:
-                    embed.set_thumbnail(url=self.user.avatar.url)
-            except Exception:
-                pass
-            embed.set_footer(text=f"Recorded by {self.exchanger.display_name}")
-
-            # Send public embed and messages via followup (public)
-            await interaction.followup.send(embed=embed)
-
-            # Public thank you
-            await interaction.channel.send(
-                f"{self.user.mention} 🙏 Thank you for choosing Gameclub exchanges! Hope you liked our service."
-            )
-
-            # Vouch: use exchanger's ID (the person who ran /done)
-            await interaction.channel.send(
-                "📌 Copy Paste this vouch in this server only or get blacklisted!"
-            )
-            await interaction.channel.send("https://discord.gg/ResmDRqhyD")
-            await interaction.channel.send(
-                f"+rep {self.exchanger.id} Legit Exchange • {self.ex_type} [${self.amount:,.2f}]"
-            )
-
-            # Feedback ping: mention exchanger (not client)
-            feedback_channel_mention = "<#1371445182658252900>"
-            await interaction.channel.send(
-                f"📝 Kindly give feedback for our exchanger {self.exchanger.mention} in {feedback_channel_mention}"
-            )
-
-            # Edit the ephemeral confirmation message seen by exchanger: mark as confirmed and disable buttons
-            try:
-                # interaction.message references the original ephemeral message (best-effort)
-                self.disable_all()
-                if interaction.message:
-                    await interaction.message.edit(content="✅ Exchange Confirmed!", view=self)
-            except Exception:
-                # fallback: try to send an ephemeral confirmation if editing fails
-                try:
-                    await interaction.followup.send("✅ Exchange Confirmed!", ephemeral=True)
-                except Exception:
-                    pass
-
-        except Exception as e:
-            # If anything goes wrong, try to notify the exchanger (ephemeral) and re-enable buttons stopped
-            try:
-                await interaction.followup.send(f"❌ Error recording exchange: {e}", ephemeral=True)
-            except Exception:
-                pass
-        finally:
-            self.stop()
+        if hasattr(self, "message") and self.message:
+            await self.message.edit(content="✅ Exchange Confirmed!", view=self)
+        self.stop()
 
     @discord.ui.button(label="CANCEL", style=discord.ButtonStyle.red)
     async def cancel(self, interaction: discord.Interaction, button: discord.ui.Button):
-        # Only the exchanger may cancel
         if interaction.user.id != self.exchanger.id:
             return await interaction.response.send_message("❌ Only the exchanger can cancel this.", ephemeral=True)
-
-        # disable buttons immediately
         self.disable_all()
-        try:
-            # Edit the ephemeral confirmation message to indicate cancellation (ephemeral)
-            if interaction.response.is_done():
-                # if already responded, use followup
-                await interaction.followup.send("❌ Exchange cancelled.", ephemeral=True)
-            else:
-                await interaction.response.edit_message(content="❌ Exchange cancelled.", view=self)
-        except Exception:
-            try:
-                await interaction.response.send_message("❌ Exchange cancelled.", ephemeral=True)
-            except Exception:
-                pass
-        finally:
-            self.stop()
-
+        if interaction.response.is_done():
+            await interaction.followup.send("❌ Exchange cancelled.", ephemeral=True)
+        else:
+            await interaction.response.edit_message(content="❌ Exchange cancelled.", view=self)
+        self.stop()
 
 @tree.command(name="done", description="Record a completed exchange")
 @app_commands.describe(
@@ -412,89 +360,70 @@ class ConfirmDone(discord.ui.View):
     ex_type="Exchange type (e.g., USDT → UPI)"
 )
 async def done(interaction: discord.Interaction, user: discord.Member, amount: float, ex_type: str):
+    if not can_use_admin_commands(interaction.user):
+        await interaction.response.send_message("🚫 You can't use this command.", ephemeral=True)
+        return
     view = ConfirmDone(user, amount, ex_type, interaction.user, timeout=30)
-
-    # send ephemeral confirmation (only visible to exchanger)
-    # store the ephemeral message object on the view so handlers can edit it later
     await interaction.response.send_message(
-        "Are you sure you want to confirm this exchange?\nPress **OKAY** to finalize.",
+        f"Are you sure you want to confirm this exchange?\n**Client:** {user.display_name}\n**Amount:** ${amount:,.2f}\n**Type:** {ex_type}",
         view=view,
         ephemeral=True
     )
     try:
-        # attempt to save the ephemeral message object for later edits
         view.message = await interaction.original_response()
-    except Exception:
-        # not critical if we fail to fetch the ephemeral message object
+    except:
         view.message = None
 
 # ---------- /adjust-total ----------
-@tree.command(name="adjust-total", description="Adjust total exchanged amount for a user")
-@app_commands.describe(user="Mention a user", adjust_amount="Amount to add or subtract (use negative to decrease)")
-async def adjust_total(interaction: discord.Interaction, user: discord.Member, adjust_amount: float):
+@tree.command(name="adjust-total", description="Adjust total exchanged amount and deals for a user")
+@app_commands.describe(user="Mention a user", adjust_amount="Amount to add/subtract", adjust_deals="Deals to add/subtract")
+async def adjust_total(interaction: discord.Interaction, user: discord.Member, adjust_amount: float = 0, adjust_deals: int = 0):
+    if not can_use_admin_commands(interaction.user):
+        await interaction.response.send_message("🚫 You can't use this command.", ephemeral=True)
+        return
     uid = str(user.id)
-    if uid not in exchanges:
-        exchanges[uid] = {"total_amount": 0.0, "deals": 0}
-    exchanges[uid]["total_amount"] += adjust_amount
-    save_json(EXCHANGE_FILE, exchanges)
-    await interaction.response.send_message(f"✅ Total adjusted. New total: ${exchanges[uid]['total_amount']:,.2f}")
+    c.execute("INSERT OR IGNORE INTO exchanges (user_id) VALUES (?)", (uid,))
+    c.execute("UPDATE exchanges SET total_amount = total_amount + ?, deals = deals + ? WHERE user_id=?", (adjust_amount, adjust_deals, uid))
+    conn.commit()
+    await interaction.response.send_message(f"✅ Adjusted {user.display_name}'s record. Amount change: {adjust_amount}, Deals change: {adjust_deals}")
+
+# ---------- /add-dot ----------
+@tree.command(name="add-dot", description="Add a custom dot command")
+@app_commands.describe(command_name="Command name without dot", response="Message to send when used")
+async def add_dot(interaction: discord.Interaction, command_name: str, response: str):
+    if not can_use_admin_commands(interaction.user):
+        await interaction.response.send_message("🚫 Only admins/exchangers can add dot commands.", ephemeral=True)
+        return
+    c.execute("INSERT OR REPLACE INTO dot_commands (command_name, response) VALUES (?, ?)", (command_name, response))
+    conn.commit()
+    await interaction.response.send_message(f"✅ Dot command `. {command_name}` added!")
+
+# ---------- Dot command listener ----------
+@bot.event
+async def on_message(message):
+    if message.author.bot:
+        return
+    if message.content.startswith("."):
+        cmd_name = message.content[1:].split(" ")[0]
+        c.execute("SELECT response FROM dot_commands WHERE command_name=?", (cmd_name,))
+        row = c.fetchone()
+        if row:
+            await message.channel.send(row[0])
+            return
+    await bot.process_commands(message)
 
 # ---------- /profile ----------
-@tree.command(name="profile", description="View a user's exchange profile")
-@app_commands.describe(user="Mention a user")
-async def profile(interaction: discord.Interaction, user: discord.Member):
-    data = exchanges.get(str(user.id), {"total_amount": 0.0, "deals": 0})
-    total = data["total_amount"]
-    deals = data["deals"]
-    avg = total / deals if deals else 0.0
-    embed = discord.Embed(
-        title=f"📊 Exchange Profile: {user.display_name}",
-        color=discord.Color.purple(),
-        timestamp=datetime.now(tz=IST)
-    )
-    embed.set_thumbnail(url=user.avatar.url if user.avatar else None)
-    embed.add_field(name="Total Exchanged", value=f"${total:,.2f}", inline=True)
-    embed.add_field(name="Total Deals", value=str(deals), inline=True)
-    embed.add_field(name="Average Deal", value=f"${avg:,.2f}", inline=True)
-    embed.set_footer(text=f"Last updated: {datetime.now(tz=IST).strftime('%I:%M %p, %d %b %Y')}")
-    await interaction.response.send_message(embed=embed)
+@tree.command(name="profile", description="View your exchange profile")
+async def profile(interaction: discord.Interaction):
+    uid = str(interaction.user.id)
+    c.execute("SELECT total_amount, deals FROM exchanges WHERE user_id=?", (uid,))
+    row = c.fetchone()
+    total = row[0] if row else 0
+    deals = row[1] if row else 0
+    embed = discord.Embed(title=f"📊 {interaction.user.display_name}'s Profile", color=discord.Color.blurple())
+    embed.add_field(name="💰 Total Amount Exchanged", value=f"${total:,.2f}")
+    embed.add_field(name="📝 Total Deals", value=str(deals))
+    await interaction.response.send_message(embed=embed, ephemeral=True)
 
-# ---------- /help ----------
-@tree.command(name="help", description="List all commands")
-async def help_cmd(interaction: discord.Interaction):
-    embed = discord.Embed(
-        title="📜 GameClub Bot Commands",
-        description="These are the available commands:",
-        color=discord.Color.gold(),
-        timestamp=datetime.now(tz=IST)
-    )
-    cmds = [
-        ("/ping", "Check if bot is alive"),
-        ("/i2c", "Convert INR → USD"),
-        ("/c2i", "Convert USD → INR"),
-        ("/setrate", "Set conversion rates (Admin only)"),
-        ("/add-addy", "Add or replace crypto slot (1-5)"),
-        ("/add-upi", "Add or replace UPI slot (1-5)"),
-        ("/manage-slot", "Update or delete any slot"),
-        ("/receiving-method", "View your saved crypto/UPI"),
-        ("/done", "Record a completed exchange"),
-        ("/adjust-total", "Adjust total exchanged amount for a user"),
-        ("/profile", "View a user's exchange profile"),
-        ("/help", "Show this help message"),
-        ("/commands", "Alias for /help")
-    ]
-    for c,d in cmds:
-        embed.add_field(name=c, value=d, inline=False)
-    await interaction.response.send_message(embed=embed)
-
-# ---------- /commands ----------
-@tree.command(name="commands", description="Alias for /help")
-async def commands_cmd(interaction: discord.Interaction):
-    await help_cmd(interaction)
-
-# ---------- Run Bot ----------
-TOKEN = os.environ.get("TOKEN")
-if TOKEN:
-    bot.run(TOKEN)
-else:
-    print("❌ TOKEN not found!")
+# ---------- RUN ----------
+bot.run(os.environ["DISCORD_TOKEN"])
