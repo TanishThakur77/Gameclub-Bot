@@ -236,9 +236,9 @@ async def manage_slot(interaction: discord.Interaction, action: app_commands.Cho
     else:
         await interaction.response.send_modal(AddSlotModal(slot_type.value, slot_num))
 
-# ---------- /receiving-method ----------
-@tree.command(name="receiving-method", description="Select crypto or UPI slot to pay")
-@app_commands.describe(slot_type="Type", slot_num="Slot number 1-5")
+# ---------- /receiving-method (FIXED CLEAN VERSION) ----------
+@tree.command(name="receiving-method", description="Show your saved payment method")
+@app_commands.describe(slot_type="Crypto or UPI", slot_num="Slot number 1-5")
 @app_commands.choices(slot_type=[
     app_commands.Choice(name="Crypto", value="crypto"),
     app_commands.Choice(name="UPI", value="upi")
@@ -250,26 +250,68 @@ async def manage_slot(interaction: discord.Interaction, action: app_commands.Cho
     app_commands.Choice(name="4", value=4),
     app_commands.Choice(name="5", value=5)
 ])
-async def receiving_method(interaction: discord.Interaction, slot_type: app_commands.Choice[str], slot_num: app_commands.Choice[int]):
+async def receiving_method(interaction: discord.Interaction, 
+                           slot_type: app_commands.Choice[str], 
+                           slot_num: app_commands.Choice[int]):
+
+    await interaction.response.defer(thinking=True)
+
     uid = str(interaction.user.id)
     slots = get_user_slot(uid)[slot_type.value]
     value = slots.get(str(slot_num.value))
-    if not value:
-        await interaction.response.send_message("❌ This slot is empty.", ephemeral=True)
-        return
 
+    if not value:
+        return await interaction.followup.send("❌ This slot is empty.", ephemeral=True)
+
+    # -------------------- EMBED BUILDING --------------------
     if slot_type.value == "crypto":
-        desc = f"💰 **{value['address']}**\nType: **{value['type']}**"
-        embed = discord.Embed(title="📌 Payment Info (Crypto)", description=desc, color=discord.Color.blue(), timestamp=datetime.now(tz=IST))
-        await interaction.response.send_message(embed=embed)
-        await interaction.channel.send(f"{value['address']}")
-    else:
-        desc = f"💰 **{value['upi']}**"
-        embed = discord.Embed(title="📌 Payment Info (UPI)", description=desc, color=discord.Color.green(), timestamp=datetime.now(tz=IST))
-        await interaction.response.send_message(embed=embed)
-        await interaction.channel.send(f"{value['upi']}")
+        embed = discord.Embed(
+            title="💠 Crypto Payment Details",
+            description="Here are your saved details:",
+            color=discord.Color.blue()
+        )
+
+        embed.add_field(name="💳 Address", value=f"```{value['address']}```", inline=False)
+        embed.add_field(name="🪙 Type", value=f"```{value['type']}```", inline=False)
+
         if "qr" in value and value["qr"]:
-            await interaction.channel.send(value["qr"])
+            embed.set_image(url=value["qr"])
+
+    else:  # UPI
+        embed = discord.Embed(
+            title="💸 UPI Payment Details",
+            description="Here are your saved details:",
+            color=discord.Color.green()
+        )
+
+        embed.add_field(name="💳 UPI ID", value=f"```{value['upi']}```", inline=False)
+
+        if "qr" in value and value["qr"]:
+            embed.set_image(url=value["qr"])
+
+    embed.set_footer(text="Payment Handler Bot • Secure")
+
+    # Send the embed first
+    await interaction.followup.send(embed=embed)
+
+    # -------------------- FOLLOW-UP MESSAGES --------------------
+    # 1. Addy / UPI
+    if slot_type.value == "crypto":
+        await interaction.followup.send(f"**Addy:** `{value['address']}`")
+    else:
+        await interaction.followup.send(f"**UPI:** `{value['upi']}`")
+
+    # 2. TYPE (crypto only)
+    if slot_type.value == "crypto":
+        await interaction.followup.send(f"**TYPE:** `{value['type']}`")
+    else:
+        await interaction.followup.send("**TYPE:** `N/A (UPI)`")
+
+    # 3. QR Image Link
+    if "qr" in value and value["qr"]:
+        await interaction.followup.send(f"**QR Image:** {value['qr']}")
+    else:
+        await interaction.followup.send("**QR Image:** `Not uploaded`")
 
 # ---------- /done ----------
 class ConfirmDone(discord.ui.View):
