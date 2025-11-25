@@ -237,81 +237,50 @@ async def manage_slot(interaction: discord.Interaction, action: app_commands.Cho
         await interaction.response.send_modal(AddSlotModal(slot_type.value, slot_num))
 
 # ---------- /receiving-method (FIXED CLEAN VERSION) ----------
-@tree.command(name="receiving-method", description="Show your saved payment method")
-@app_commands.describe(slot_type="Crypto or UPI", slot_num="Slot number 1-5")
-@app_commands.choices(slot_type=[
-    app_commands.Choice(name="Crypto", value="crypto"),
-    app_commands.Choice(name="UPI", value="upi")
-])
-@app_commands.choices(slot_num=[
-    app_commands.Choice(name="1", value=1),
-    app_commands.Choice(name="2", value=2),
-    app_commands.Choice(name="3", value=3),
-    app_commands.Choice(name="4", value=4),
-    app_commands.Choice(name="5", value=5)
-])
-async def receiving_method(interaction: discord.Interaction, 
-                           slot_type: app_commands.Choice[str], 
-                           slot_num: app_commands.Choice[int]):
-
+@tree.command(name="receivingmethod", description="Show your saved receiving method details")
+async def receivingmethod(interaction: discord.Interaction, method: str, slot: int):
     await interaction.response.defer(thinking=True)
 
-    uid = str(interaction.user.id)
-    slots = get_user_slot(uid)[slot_type.value]
-    value = slots.get(str(slot_num.value))
+    # Load the saved data
+    with open("database.json", "r") as f:
+        db = json.load(f)
 
-    if not value:
-        return await interaction.followup.send("❌ This slot is empty.", ephemeral=True)
+    user_id = str(interaction.user.id)
 
-    # -------------------- EMBED BUILDING --------------------
-    if slot_type.value == "crypto":
-        embed = discord.Embed(
-            title="💠 Crypto Payment Details",
-            description="Here are your saved details:",
-            color=discord.Color.blue()
-        )
+    if user_id not in db or method not in db[user_id] or str(slot) not in db[user_id][method]:
+        return await interaction.followup.send("❌ No data found for this method or slot.")
 
-        embed.add_field(name="💳 Address", value=f"```{value['address']}```", inline=False)
-        embed.add_field(name="🪙 Type", value=f"```{value['type']}```", inline=False)
+    saved = db[user_id][method][str(slot)]
 
-        if "qr" in value and value["qr"]:
-            embed.set_image(url=value["qr"])
+    addy = saved.get("addy", "Not set")
+    type_value = saved.get("type", "N/A")
+    qr_url = saved.get("qr", None)
 
-    else:  # UPI
-        embed = discord.Embed(
-            title="💸 UPI Payment Details",
-            description="Here are your saved details:",
-            color=discord.Color.green()
-        )
+    # -------------------- BUILD EMBED --------------------
+    embed = discord.Embed(
+        title="📥 Receiving Method Details",
+        description="Here are your saved payment details:",
+        color=discord.Color.blue()
+    )
 
-        embed.add_field(name="💳 UPI ID", value=f"```{value['upi']}```", inline=False)
+    embed.add_field(name="💳 Addy / UPI", value=f"```{addy}```", inline=False)
 
-        if "qr" in value and value["qr"]:
-            embed.set_image(url=value["qr"])
+    if method.lower() == "crypto":
+        embed.add_field(name="🪙 Type", value=f"```{type_value}```", inline=False)
+
+    if qr_url is not None:
+        embed.set_image(url=qr_url)
 
     embed.set_footer(text="Payment Handler Bot • Secure")
 
-    # Send the embed first
+    # Send the embed
     await interaction.followup.send(embed=embed)
 
-    # -------------------- FOLLOW-UP MESSAGES --------------------
-    # 1. Addy / UPI
-    if slot_type.value == "crypto":
-        await interaction.followup.send(f"**Addy:** `{value['address']}`")
-    else:
-        await interaction.followup.send(f"**UPI:** `{value['upi']}`")
+    # ---------------- FOLLOW-UP MESSAGES ----------------
+    await interaction.followup.send(f"**Addy/UPI:** `{addy}`")
+    await interaction.followup.send(f"**TYPE:** `{type_value}`")
+    await interaction.followup.send(f"**QR Image:** {qr_url if qr_url else 'No QR uploaded.'}")
 
-    # 2. TYPE (crypto only)
-    if slot_type.value == "crypto":
-        await interaction.followup.send(f"**TYPE:** `{value['type']}`")
-    else:
-        await interaction.followup.send("**TYPE:** `N/A (UPI)`")
-
-    # 3. QR Image Link
-    if "qr" in value and value["qr"]:
-        await interaction.followup.send(f"**QR Image:** {value['qr']}")
-    else:
-        await interaction.followup.send("**QR Image:** `Not uploaded`")
 
 # ---------- /done ----------
 class ConfirmDone(discord.ui.View):
